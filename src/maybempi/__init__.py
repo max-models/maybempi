@@ -31,7 +31,10 @@ from maybempi.launch import (
     local_rank,
 )
 from maybempi.serial import (
+    SerialCartcomm,
     SerialComm,
+    SerialFile,
+    SerialGroup,
     SerialMPI,
     SerialPrequest,
     SerialRequest,
@@ -48,7 +51,10 @@ __all__ = [
     "LAUNCHER_VARIABLES",
     "LOCAL_RANK_VARIABLES",
     "OVERRIDE_VARIABLE",
+    "SerialCartcomm",
     "SerialComm",
+    "SerialFile",
+    "SerialGroup",
     "SerialMPI",
     "SerialPrequest",
     "SerialRequest",
