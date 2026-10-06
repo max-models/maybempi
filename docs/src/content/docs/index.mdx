@@ -1,9 +1,9 @@
 ---
 title: maybempi
-description: Template repository for Python projects.
+description: Use MPI only when launched under MPI, and a serial stand-in for mpi4py otherwise.
 template: splash
 hero:
-  tagline: A starting point for a Python package with tests, CI, tutorials and an Astro documentation site.
+  tagline: Run the same code under mpirun and as a plain python script, without starting MPI in the serial run.
   actions:
     - text: Get started
       link: /maybempi/getting-started/installation/
@@ -16,28 +16,37 @@ hero:
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-## What is included
+```python
+import maybempi
+
+MPI = maybempi.get_mpi()  # mpi4py.MPI under mpirun/srun, a serial stand-in otherwise
+comm = MPI.COMM_WORLD
+total = comm.allreduce(local_total, op=MPI.SUM)
+```
 
 <CardGrid>
-	<Card title="Package layout" icon="open-book">
-		A `src/` layout with a console entry point, `pytest` tests and a `pyproject.toml` ready for PyPI.
+	<Card title="No MPI in serial runs" icon="rocket">
+		Importing `mpi4py.MPI` starts MPI, which costs close to a second. maybempi decides from the
+		launcher's environment variables and never imports mpi4py in a serial run.
 	</Card>
-	<Card title="Continuous integration" icon="rocket">
-		GitHub Actions for tests, static analysis, tutorial execution, documentation and PyPI publishing.
+	<Card title="One code path" icon="random">
+		The stand-in has the module constants and communicator methods of mpi4py, with the results
+		MPI gives on one process.
 	</Card>
-	<Card title="Tutorials" icon="document">
-		Jupyter notebooks in `tutorials/` are executed and published as pages of this site.
+	<Card title="Loud when unsupported" icon="warning">
+		Methods the stand-in does not implement raise `AttributeError` instead of silently doing
+		nothing.
 	</Card>
-	<Card title="API reference" icon="setting">
-		Every module, class and function is documented from the docstrings with starlight-pydocs.
+	<Card title="No dependencies" icon="puzzle">
+		Pure Python. mpi4py is only needed for MPI runs, NumPy only for array buffers.
 	</Card>
 </CardGrid>
 
 ## Start here
 
 <CardGrid>
-	<LinkCard title="Installation" href="/maybempi/getting-started/installation/" description="Create an environment and install the package." />
-	<LinkCard title="Quickstart" href="/maybempi/getting-started/quickstart/" description="Run the command line entry point." />
-	<LinkCard title="Tutorials" href="/maybempi/tutorials/" description="Executed notebooks with their outputs." />
-	<LinkCard title="API reference" href="/maybempi/api/maybempi/" description="Generated from the docstrings." />
+	<LinkCard title="Installation" href="/maybempi/getting-started/installation/" description="pip install maybempi, with or without mpi4py." />
+	<LinkCard title="Quickstart" href="/maybempi/getting-started/quickstart/" description="Replace from mpi4py import MPI." />
+	<LinkCard title="How the decision is made" href="/maybempi/guides/detection/" description="Launcher variables, the MAYBEMPI override and Slurm." />
+	<LinkCard title="The serial stand-in" href="/maybempi/guides/serial-stand-in/" description="What each call does on one process." />
 </CardGrid>

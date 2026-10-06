@@ -11,108 +11,85 @@ analysis](https://github.com/max-models/maybempi/actions/workflows/static_analys
 [![PyPI](https://img.shields.io/pypi/v/maybempi.png)](https://pypi.org/project/maybempi/)
 [![Python](https://img.shields.io/pypi/pyversions/maybempi.png)](https://pypi.org/project/maybempi/)
 
-Template repository for Python projects: a `src/` package with a console
-entry point, `pytest` tests, GitHub Actions for tests, static analysis,
-tutorials, documentation and PyPI publishing, and an
-[Astro](https://astro.build/) +
-[Starlight](https://starlight.astro.build/) documentation site.
+Use MPI only when the process was launched under MPI, and a serial
+stand-in for `mpi4py` otherwise. The same code runs under
+`mpirun`/`srun` and as a plain `python script.py`, and the serial run
+never starts MPI.
 
 Documentation: <https://max-models.github.io/maybempi/>
 
-## Use the template
+``` python
+import maybempi
 
-Create a repository from this template, then rename the package:
-
-``` bash
-bash setup_project.sh my-app
-rm setup_project.sh
+# mpi4py.MPI under mpirun/mpiexec/srun, a serial stand-in otherwise
+MPI = maybempi.get_mpi()
+comm = MPI.COMM_WORLD
+total = comm.allreduce(local_total, op=MPI.SUM)  # local_total in a serial run
 ```
 
-This replaces `maybempi` with `my-app` everywhere, moves
-`src/app` to `src/my_app`, and points the entry point, tests and docs at
-it.
+## Why
+
+Importing `mpi4py.MPI` calls `MPI_Init`, which costs close to a second
+and makes every collective cost something, even on one process. maybempi
+decides from the environment variables that MPI launchers export (Open
+MPI, MPICH, Intel MPI, PMIx/`srun`, MVAPICH2, Cray), without importing
+mpi4py. In a serial run it returns a stand-in with the module constants
+and communicator methods of mpi4py, which give the results MPI gives on
+one process: `allreduce(x)` is `x`, `gather(x)` is `[x]`,
+`Allreduce(send, recv)` copies. Methods it does not implement raise
+`AttributeError` instead of silently doing nothing.
+
+- `MAYBEMPI=0`/`1` overrides the decision.
+- `maybempi.is_serial(MPI)` tells the stand-in from mpi4py.
+- `maybempi.local_rank()` gives the node-local rank before `MPI_Init`,
+  e.g. to pick a GPU.
+- The `maybempi` command prints what it decides, and why:
+  `mpirun -n 2 maybempi --init`.
+
+maybempi is pure Python and has no dependencies.
 
 ## Install
+
+``` bash
+pip install maybempi            # serial runs only
+pip install "maybempi[mpi]"     # with mpi4py, for MPI runs
+```
+
+## Development
 
 With [uv](https://docs.astral.sh/uv/):
 
 ``` bash
 make install    # uv sync --extra dev, plus the pre-commit hooks
-uv run maybempi
-```
-
-Or create and activate a Python environment (3.10 or newer):
-
-``` bash
-python -m venv env
-source env/bin/activate
-pip install --upgrade pip
-```
-
-Install the code and requirements with pip:
-
-``` bash
-pip install -e .
-```
-
-Run the code with:
-
-``` bash
-maybempi
-```
-
-The `test`, `docs` and `dev` extras install the test runner, the
-documentation tooling and the linters:
-
-``` bash
-pip install -e ".[dev]"
-```
-
-## Development
-
-Formatting and linting use [ruff](https://docs.astral.sh/ruff/), type
-checking [pyright](https://microsoft.github.io/pyright/), run by
-[pre-commit](https://pre-commit.com/) and in CI:
-
-``` bash
-make lint     # ruff check, ruff format --check, pyright
-make test     # pytest with coverage
+make lint       # ruff check, ruff format --check, pyright
+make test       # pytest with coverage
+mpiexec -n 2 .venv/bin/python -m pytest src/maybempi/tests/mpi   # tests under a real launcher
 ```
 
 Commit messages follow [Conventional
 Commits](https://www.conventionalcommits.org/); see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Build docs
-
-The documentation in `docs/` is an Astro + Starlight site: hand-written
-pages, the notebooks in `tutorials/` executed and published as pages,
-and the API reference generated from the docstrings with
-[starlight-pydocs](https://ewels.github.io/starlight-pydocs/). It needs
-Node 22 or newer.
+The documentation in `docs/` is an [Astro](https://astro.build/) +
+[Starlight](https://starlight.astro.build/) site with the executed
+notebooks from `tutorials/` and an API reference generated from the
+docstrings. It needs Node 22 or newer:
 
 ``` bash
 make docs-install     # npm packages and the Python docs extra
 make docs-notebooks   # execute tutorials/*.ipynb and convert them to pages
 make docs-dev         # live preview at http://localhost:4321/maybempi/
-make docs-build       # the static site in docs/dist
 ```
-
-## Build the README
 
 `README.md` is rendered from `README.qmd` with
-[Quarto](https://quarto.org/):
-
-``` bash
-make readme
-```
+[Quarto](https://quarto.org/): `make readme`.
 
 ## Releases
 
 Before merging a release to `main`, update the version in
-`pyproject.toml`, `src/maybempi/__init__.py` and `CITATION.cff` (including
-its release date), and add the release notes to `CHANGELOG.md`. The push
-to `main` creates a GitHub release with a `vX.Y.Z` tag and publishes the
-package to PyPI with trusted publishing (OIDC). The one-time PyPI and
-GitHub configuration is described in the [publishing
+`pyproject.toml`, `src/maybempi/__init__.py` and `CITATION.cff`
+(including its release date), and add the release notes to
+`CHANGELOG.md`. The push to `main` creates a GitHub release with a
+`vX.Y.Z` tag and publishes the package to PyPI with trusted publishing
+(OIDC). See the [publishing
 guide](https://max-models.github.io/maybempi/development/publishing/).

@@ -22,7 +22,9 @@ pre-commit install
 
 - Format and lint with [ruff](https://docs.astral.sh/ruff/); the pre-commit hooks run it for you.
 - Type-check with `pyright src/`.
-- Add tests under `src/<package>/tests/` and run `pytest .`.
+- Add tests under `src/maybempi/tests/unit/` and run `pytest .`. Tests that need several
+  ranks go in `src/maybempi/tests/mpi/`; run them with
+  `mpiexec -n 2 python -m pytest src/maybempi/tests/mpi` (CI does, with Open MPI and MPICH).
 - Every public module, class and function needs a Google-style docstring. They are rendered
   in the API reference and checked by ruff's `D` rules.
 - Preview the documentation with `make docs-dev`; see the

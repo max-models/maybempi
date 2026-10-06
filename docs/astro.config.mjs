@@ -23,7 +23,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'maybempi',
-			description: 'Template repository for Python projects.',
+			description: 'Use MPI only when launched under MPI, and a serial stand-in for mpi4py otherwise.',
 			customCss: ['katex/dist/katex.min.css', './src/styles/custom.css'],
 			components: {
 				Header: './src/components/Header.astro',
@@ -67,6 +67,14 @@ export default defineConfig({
 					items: [
 						{ label: 'Installation', slug: 'getting-started/installation' },
 						{ label: 'Quickstart', slug: 'getting-started/quickstart' },
+					],
+				},
+				{
+					label: 'Guides',
+					items: [
+						{ label: 'How the decision is made', slug: 'guides/detection' },
+						{ label: 'The serial stand-in', slug: 'guides/serial-stand-in' },
+						{ label: 'Using maybempi in a library', slug: 'guides/libraries' },
 					],
 				},
 				{
