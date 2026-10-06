@@ -1377,7 +1377,7 @@ wheels = [
 
 [[package]]
 name = "maybempi"
-version = "0.1.0"
+version = "0.1.2"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -1424,7 +1424,7 @@ requires-dist = [
     { name = "griffe", marker = "extra == 'docs'" },
     { name = "ipykernel", marker = "extra == 'docs'" },
     { name = "jupyterlab", marker = "extra == 'dev'" },
-    { name = "maybempi", extras = ["test", "docs"], marker = "extra == 'dev'" },
+    { name = "maybempi", extras = ["docs", "test"], marker = "extra == 'dev'" },
     { name = "mpi4py", marker = "extra == 'mpi'" },
     { name = "nbclient", marker = "extra == 'docs'", specifier = ">=0.10" },
     { name = "nbformat", marker = "extra == 'docs'", specifier = ">=5.10" },
