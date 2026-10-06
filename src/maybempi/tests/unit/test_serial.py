@@ -228,3 +228,28 @@ def test_matches_mpi4py_on_one_process():
         getattr(self_comm, name)(send, recv_real)
         getattr(comm, name)(send, recv_serial)
         np.testing.assert_array_equal(recv_real, recv_serial, err_msg=name)
+
+
+def test_mpi4py_constants_next_to_real_mpi(monkeypatch):
+    """A SerialComm used in an MPI job gets mpi4py's constants (MPICH: PROC_NULL is -1)."""
+    import sys
+    import types
+
+    real = types.ModuleType("mpi4py.MPI")
+    real.IN_PLACE = object()  # type: ignore[attr-defined]
+    real.PROC_NULL = -1  # type: ignore[attr-defined]
+    real.ANY_SOURCE = -7  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "mpi4py.MPI", real)
+    data = np.arange(3.0)
+    comm.Reduce(real.IN_PLACE, data, op=MPI.SUM, root=0)
+    comm.Allreduce(real.IN_PLACE, data)
+    comm.Scatter(data, real.IN_PLACE)
+    comm.Scatterv(data, real.IN_PLACE)
+    np.testing.assert_array_equal(data, [0, 1, 2])
+    assert comm.sendrecv(1, dest=real.PROC_NULL, source=0) is None
+    assert comm.sendrecv(1, dest=0, source=real.ANY_SOURCE) == 1
+    recv = np.zeros(3)
+    comm.Sendrecv(data, dest=real.PROC_NULL, recvbuf=recv)
+    np.testing.assert_array_equal(recv, 0)
+    with pytest.raises(ValueError, match="only rank 0"):
+        comm.bcast(1, root=5)

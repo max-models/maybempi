@@ -12,10 +12,10 @@ from mpi4py import MPI
 with
 
 ```python
-import maybempi
-
-MPI = maybempi.get_mpi()
+from maybempi import MPI
 ```
+
+which is the same as `MPI = maybempi.get_mpi()`.
 
 The rest of the code stays as it is. Under `mpirun`, `mpiexec` or `srun`, `MPI` is the
 `mpi4py.MPI` module. In a plain `python script.py`, it is a serial stand-in, and mpi4py is never

@@ -58,6 +58,20 @@ def count_copy(kind, array):  # kind is "to_host" or "to_device"
 maybempi.set_copy_hook(count_copy)
 ```
 
+## Next to real MPI
+
+A `SerialComm` can also be used inside an MPI job, for work that one rank does on its own (for
+example post-processing on rank 0 while `MPI` is mpi4py). It then accepts mpi4py's own
+`MPI.IN_PLACE`, `MPI.PROC_NULL` and `MPI.ANY_SOURCE` as well as its own, so the same calls work
+with either module's constants:
+
+```python
+from maybempi import MPI, SerialComm
+
+comm = SerialComm()  # size 1, even under mpirun
+comm.Reduce(MPI.IN_PLACE, totals, op=MPI.SUM, root=0)  # nothing to do
+```
+
 ## Ranks
 
 Only rank 0 exists. A `root`, `dest` or `source` other than 0, `PROC_NULL` or `ANY_SOURCE`

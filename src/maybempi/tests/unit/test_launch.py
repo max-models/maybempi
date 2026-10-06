@@ -133,3 +133,12 @@ def test_top_level_exports():
         assert hasattr(maybempi, name), name
     assert maybempi.get_mpi is get_mpi
     assert maybempi.OVERRIDE_VARIABLE == "MAYBEMPI"
+
+
+def test_from_maybempi_import_mpi(fake_mpi4py, clean_env):
+    from maybempi import MPI
+
+    assert MPI is get_mpi()  # mpi4py's module is initialized: an MPI run
+    assert maybempi.MPI is fake_mpi4py
+    with pytest.raises(AttributeError, match="no attribute 'nothing'"):
+        _ = maybempi.nothing  # type: ignore[attr-defined]
