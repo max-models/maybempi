@@ -4,7 +4,7 @@ requires = [ "setuptools", "wheel" ]
 
 [project]
 name = "maybempi"
-version = "0.1.1"
+version = "0.1.2"
 description = "Use MPI only when launched under MPI, and a serial stand-in for mpi4py otherwise."
 readme = "README.md"
 keywords = [ "hpc", "mpi", "mpi4py", "parallel", "serial", "slurm" ]
