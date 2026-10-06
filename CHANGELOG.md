@@ -5,6 +5,14 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `maybempi.__version__` is read from the installed package metadata (the version in
+  `pyproject.toml`) instead of a second hard-coded copy; 0.1.1 reported 0.1.0. `CITATION.cff`
+  says 0.1.1.
+
+## [0.1.1] - 2026-10-06
+
 ### Added
 
 - `SerialComm.Alltoallv`.

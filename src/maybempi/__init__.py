@@ -17,6 +17,7 @@ MPI``: the name resolves to ``get_mpi()`` when it is first imported.
 :mod:`maybempi.launch` holds the detection, :mod:`maybempi.serial` the stand-in.
 """
 
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 from maybempi.launch import (
@@ -38,7 +39,10 @@ from maybempi.serial import (
     set_copy_hook,
 )
 
-__version__ = "0.1.0"
+try:
+    __version__ = version("maybempi")  # the version in pyproject.toml
+except PackageNotFoundError:  # running from a source tree that is not installed
+    __version__ = "unknown"
 
 __all__ = [
     "LAUNCHER_VARIABLES",
