@@ -32,6 +32,7 @@ The `op` argument is accepted and ignored: on one process every reduction return
 | `Allreduce`, `Reduce`, `Scan`, `Allgather`, `Gather`, `Alltoall`, `Scatter` | copies the send buffer into the receive buffer |
 | the same with `MPI.IN_PLACE`                             | nothing                                   |
 | `Gatherv`, `Allgatherv`                                  | copies at the displacement of rank 0      |
+| `Alltoallv`                                              | copies the part for rank 0 to the displacement of rank 0 |
 | `Scatterv`                                               | copies the part at the displacement of rank 0 |
 | `Bcast`, `Exscan`                                        | nothing                                   |
 | `Sendrecv` to and from rank 0                            | copies; nothing with `PROC_NULL`          |

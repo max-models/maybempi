@@ -123,6 +123,15 @@ def _displacement(spec: Any) -> int:
     return 0
 
 
+def _count(spec: Any) -> int | None:
+    """Return the count of rank 0 in a vector buffer spec ``[buf, counts, displs, type]``."""
+    if isinstance(spec, (list, tuple)) and len(spec) >= 2:
+        counts = spec[1]
+        if counts is not None and not isinstance(counts, _Constant):
+            return int(counts[0])
+    return None
+
+
 def _copy(source: Any, target: Any, offset: int = 0) -> None:
     """Copy the elements of the array `source` into `target`, starting at `offset`.
 
@@ -431,6 +440,16 @@ class SerialComm:
     def Alltoall(self, sendbuf: Any, recvbuf: Any) -> None:
         """Copy `sendbuf` into `recvbuf`."""
         _copy(_buffer(sendbuf), _buffer(recvbuf))
+
+    def Alltoallv(self, sendbuf: Any, recvbuf: Any) -> None:
+        """Copy the part of `sendbuf` for rank 0 into `recvbuf`, at the displacement of rank 0."""
+        if _is_in_place(sendbuf):
+            return
+        source = _buffer(sendbuf).reshape(-1)
+        start = _displacement(sendbuf)
+        count = _count(sendbuf)
+        stop = source.size if count is None else start + count
+        _copy(source[start:stop], _buffer(recvbuf), _displacement(recvbuf))
 
     def Sendrecv(
         self,
