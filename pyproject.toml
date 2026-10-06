@@ -1,6 +1,5 @@
 [build-system]
 build-backend = "setuptools.build_meta"
-
 requires = [ "setuptools", "wheel" ]
 
 [project]
@@ -28,14 +27,13 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = []
-
 optional-dependencies.dev = [
   "jupyterlab",
+  "maybempi[docs,test]",
   "pre-commit",
   "pyproject-fmt",
   "pyright",
   "ruff",
-  "maybempi[test,docs]",
 ]
 optional-dependencies.docs = [
   "griffe",
@@ -46,30 +44,26 @@ optional-dependencies.docs = [
 ]
 optional-dependencies.mpi = [ "mpi4py" ]
 optional-dependencies.test = [ "numpy", "pytest", "pytest-cov" ]
-urls."Documentation" = "https://max-models.github.io/maybempi/"
-urls."Source" = "https://github.com/max-models/maybempi"
-urls."Changelog" = "https://github.com/max-models/maybempi/blob/main/CHANGELOG.md"
+urls.Changelog = "https://github.com/max-models/maybempi/blob/main/CHANGELOG.md"
+urls.Documentation = "https://max-models.github.io/maybempi/"
+urls.Source = "https://github.com/max-models/maybempi"
 scripts.maybempi = "maybempi.cli:main"
 
-[tool.setuptools.packages.find]
-where = [ "src" ]
-
-[tool.setuptools.package-data]
-"*" = [ "py.typed" ]
+[tool.setuptools]
+package-data."*" = [ "py.typed" ]
+packages.find.where = [ "src" ]
 
 [tool.ruff]
 target-version = "py310"
 line-length = 88
 extend-include = [ "*.ipynb" ]
-
-[tool.ruff.lint]
 # pycodestyle, pyflakes, isort, pyupgrade, bugbear and pydocstyle
-select = [ "B", "D", "E", "F", "I", "UP", "W" ]
-ignore = [ "E501" ] # line length is handled by the formatter
-pydocstyle.convention = "google"
-per-file-ignores."**/tests/**" = [ "D" ]
-per-file-ignores."*.ipynb" = [ "D" ]
-per-file-ignores."docs/tools/*" = [ "D" ]
+lint.select = [ "B", "D", "E", "F", "I", "UP", "W" ]
+lint.ignore = [ "E501" ]  # line length is handled by the formatter
+lint.per-file-ignores."**/tests/**" = [ "D" ]
+lint.per-file-ignores."*.ipynb" = [ "D" ]
+lint.per-file-ignores."docs/tools/*" = [ "D" ]
+lint.pydocstyle.convention = "google"
 
 [tool.pyright]
 include = [ "src" ]
@@ -77,14 +71,12 @@ exclude = [ "**/tests" ]
 pythonVersion = "3.10"
 typeCheckingMode = "standard"
 
-[tool.pytest.ini_options]
-pythonpath = [ "src" ]
-testpaths = [ "src" ]
-addopts = "-ra"
+[tool.pytest]
+ini_options.pythonpath = [ "src" ]
+ini_options.testpaths = [ "src" ]
+ini_options.addopts = "-ra"
 
-[tool.coverage.run]
-source = [ "maybempi" ]
-omit = [ "*/tests/*" ]
-
-[tool.coverage.report]
-show_missing = true
+[tool.coverage]
+run.omit = [ "*/tests/*" ]
+run.source = [ "maybempi" ]
+report.show_missing = true
