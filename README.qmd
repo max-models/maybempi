@@ -22,10 +22,9 @@ serial run never starts MPI.
 Documentation: <https://max-models.github.io/maybempi/>
 
 ```python
-import maybempi
+from maybempi import MPI  # instead of: from mpi4py import MPI
 
 # mpi4py.MPI under mpirun/mpiexec/srun, a serial stand-in otherwise
-MPI = maybempi.get_mpi()
 comm = MPI.COMM_WORLD
 total = comm.allreduce(local_total, op=MPI.SUM)  # local_total in a serial run
 ```

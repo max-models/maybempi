@@ -7,7 +7,9 @@ never ``None`` in place of a value. Methods that are not implemented raise
 ``AttributeError`` instead of silently doing nothing.
 
 Buffers are NumPy-like arrays (``.reshape``, ``.flags``, ``.size``) or mpi4py
-buffer specifications (``[array, MPI.DOUBLE]``). Arrays with a ``.get()``
+buffer specifications (``[array, MPI.DOUBLE]``). A :class:`SerialComm` may also
+be used next to real MPI (e.g. for work done by one rank of an MPI job): it then
+accepts mpi4py's own ``IN_PLACE``, ``PROC_NULL`` and ``ANY_SOURCE`` as well. Arrays with a ``.get()``
 method, such as CuPy arrays, are copied to a host receive buffer with
 ``.get()``; :func:`set_copy_hook` reports such copies to the application.
 """
@@ -15,6 +17,7 @@ method, such as CuPy arrays, are copied to a host receive buffer with
 from __future__ import annotations
 
 import socket
+import sys
 import time
 from collections.abc import Callable
 from types import MappingProxyType
@@ -88,6 +91,22 @@ _ANY_SOURCE = -1
 _UNDEFINED = -32766
 
 
+def _mpi4py_constant(name: str) -> Any:
+    """Return ``mpi4py.MPI.<name>`` if the application imported mpi4py, else None."""
+    module = sys.modules.get("mpi4py.MPI")
+    return getattr(module, name, None) if module is not None else None
+
+
+def _is_in_place(obj: Any) -> bool:
+    """Tell whether `obj` is ``IN_PLACE``, the stand-in's or mpi4py's."""
+    return obj is _IN_PLACE or (obj is not None and obj is _mpi4py_constant("IN_PLACE"))
+
+
+def _is_proc_null(rank: Any) -> bool:
+    """Tell whether `rank` is ``PROC_NULL``, the stand-in's or mpi4py's."""
+    return rank == _PROC_NULL or rank == _mpi4py_constant("PROC_NULL")
+
+
 def _buffer(spec: Any) -> Any:
     """Return the array of an mpi4py buffer specification (``buf`` or ``[buf, ...]``)."""
     if isinstance(spec, (list, tuple)):
@@ -110,7 +129,7 @@ def _copy(source: Any, target: Any, offset: int = 0) -> None:
     Both are flattened (C order). A device source (with ``.get()``) is copied to
     the host for a host target.
     """
-    if source is _IN_PLACE or source is None or target is None:
+    if _is_in_place(source) or source is None or target is None:
         return
     to_host = hasattr(source, "get") and not hasattr(target, "get")
     to_device = not hasattr(source, "get") and hasattr(target, "get")
@@ -131,7 +150,9 @@ def _copy(source: Any, target: Any, offset: int = 0) -> None:
 
 
 def _check_rank(rank: int, what: str) -> None:
-    if rank not in (0, _PROC_NULL, _ANY_SOURCE):
+    if rank in (0, _PROC_NULL, _ANY_SOURCE) or _is_proc_null(rank):
+        return
+    if rank != _mpi4py_constant("ANY_SOURCE"):
         raise ValueError(f"{what}={rank}: a serial communicator has only rank 0")
 
 
@@ -339,9 +360,9 @@ class SerialComm:
         """Return `sendobj` (sent to and received from rank 0), or None with ``PROC_NULL``."""
         _check_rank(dest, "dest")
         _check_rank(source, "source")
-        if source == _PROC_NULL:
+        if _is_proc_null(source):
             return None
-        return sendobj if dest != _PROC_NULL else None
+        return None if _is_proc_null(dest) else sendobj
 
     def ibcast(self, obj: Any, root: int = 0) -> SerialRequest:
         """Return a completed request whose ``wait()`` returns `obj`."""
@@ -394,13 +415,13 @@ class SerialComm:
     def Scatter(self, sendbuf: Any, recvbuf: Any, root: int = 0) -> None:
         """Copy `sendbuf` into `recvbuf` (nothing with ``IN_PLACE``)."""
         _check_rank(root, "root")
-        if recvbuf is not _IN_PLACE:
+        if not _is_in_place(recvbuf):
             _copy(_buffer(sendbuf), _buffer(recvbuf))
 
     def Scatterv(self, sendbuf: Any, recvbuf: Any, root: int = 0) -> None:
         """Copy the part of `sendbuf` at the displacement of rank 0 into `recvbuf`."""
         _check_rank(root, "root")
-        if recvbuf is _IN_PLACE:
+        if _is_in_place(recvbuf):
             return
         source = _buffer(sendbuf).reshape(-1)
         start = _displacement(sendbuf)
@@ -424,7 +445,7 @@ class SerialComm:
         """Copy `sendbuf` into `recvbuf` (sent to and received from rank 0); nothing with ``PROC_NULL``."""
         _check_rank(dest, "dest")
         _check_rank(source, "source")
-        if _PROC_NULL in (dest, source):
+        if _is_proc_null(dest) or _is_proc_null(source):
             return
         _copy(_buffer(sendbuf), _buffer(recvbuf))
 

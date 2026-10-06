@@ -11,8 +11,13 @@ environment the launcher sets up, without importing mpi4py, and returns either
     comm = MPI.COMM_WORLD
     total = comm.allreduce(local_total, op=MPI.SUM)
 
+``from maybempi import MPI`` is the drop-in replacement for ``from mpi4py import
+MPI``: the name resolves to ``get_mpi()`` when it is first imported.
+
 :mod:`maybempi.launch` holds the detection, :mod:`maybempi.serial` the stand-in.
 """
+
+from typing import Any
 
 from maybempi.launch import (
     LAUNCHER_VARIABLES,
@@ -52,3 +57,10 @@ __all__ = [
     "local_rank",
     "set_copy_hook",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve ``maybempi.MPI`` (and ``from maybempi import MPI``) to :func:`get_mpi`."""
+    if name == "MPI":
+        return get_mpi()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

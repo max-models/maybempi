@@ -3,21 +3,19 @@ title: Using maybempi in a library
 description: Decide once, share the communicator, and tell serial from MPI runs.
 ---
 
-A library that supports both serial and MPI runs gets its MPI module once, at import time:
+A library that supports both serial and MPI runs imports the MPI module from maybempi wherever
+it would import mpi4py's:
 
 ```python
-# mylib/_mpi.py
-import maybempi
-
-MPI = maybempi.get_mpi()
+from maybempi import MPI
 
 
 def default_comm():
     return MPI.COMM_WORLD
 ```
 
-All modules import `MPI` from there. Because `get_mpi()` decides once per process, the
-library and the application using it always agree, even if both call it.
+`MPI` is decided once per process, so the library, the libraries it uses and the application
+always agree, even if each of them imports it.
 
 ## Type annotations
 

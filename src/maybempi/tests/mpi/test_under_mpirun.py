@@ -49,19 +49,29 @@ def test_local_rank_matches_the_node_communicator():
 @pytest.mark.skipif(maybempi.launched_under_mpi(), reason="already under a launcher")
 @pytest.mark.skipif(not has_mpi, reason="needs mpiexec and mpi4py")
 def test_mpiexec():
-    """``mpiexec -n 2 maybempi --init``: two ranks, each with mpi4py."""
+    """``mpiexec -n 2 maybempi --init``: rank 0 prints one table for both ranks."""
     command = ["mpiexec", "-n", "2"]
     help_text = subprocess.run(
         ["mpiexec", "--help"], capture_output=True, text=True, check=False
     ).stdout
     if "--oversubscribe" in help_text:  # Open MPI: allow more ranks than cores
         command.append("--oversubscribe")
+    # a session of its own: the launcher may signal its process group when it ends
     result = subprocess.run(
         [*command, sys.executable, "-m", "maybempi", "--init"],
         capture_output=True,
         text=True,
         timeout=120,
-        check=True,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
     )
-    assert result.stdout.count("MPI: mpi4py") == 2, result.stdout
-    assert "rank: 0 of 2" in result.stdout and "rank: 1 of 2" in result.stdout
+    assert result.returncode == 0, (
+        f"{' '.join(command)} exited with {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    common, per_rank = result.stdout.strip().split("\n\n")
+    assert result.stdout.count("item ") == 1, result.stdout  # one table, from rank 0
+    common_rows = [line.split() for line in common.splitlines()]
+    assert ["MPI", "mpi4py"] in common_rows and ["size", "2"] in common_rows
+    ranks = [line.split()[0] for line in per_rank.splitlines()[2:]]
+    assert ranks == ["0", "1"], result.stdout

@@ -65,6 +65,10 @@ jobs:
   # Real MPI: the tests in src/maybempi/tests/mpi under mpiexec, with two MPI implementations.
   mpi:
     runs-on: ubuntu-latest
+    env:
+      # MPICH talks through UCX, which otherwise tries the runner's RDMA device (mana_0) and
+      # fails in MPI_Init ("failed to create UD QP ... Operation not supported")
+      UCX_TLS: self,sm,tcp
     strategy:
       fail-fast: false
       matrix:
