@@ -1,26 +1,26 @@
 ---
 title: Quickstart
-description: Run the command line entry point of template-python.
+description: Run the command line entry point of maybempi.
 ---
 
-First, ensure that `template-python` is [installed](/template-python/getting-started/installation/).
+First, ensure that `maybempi` is [installed](/maybempi/getting-started/installation/).
 
 ## Basic usage
 
 After installation, you can run the application with:
 
 ```bash
-template-python
+maybempi
 ```
 
-which calls `app.main.main` and prints a greeting.
+which calls `maybempi.main.main` and prints a greeting.
 
 ## Use the package from Python
 
 ```python
-from app.main import main
+from maybempi.main import main
 
 main()
 ```
 
-See the [API reference](/template-python/api/app/) for every module and function.
+See the [API reference](/maybempi/api/maybempi/) for every module and function.

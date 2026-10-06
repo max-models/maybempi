@@ -22,7 +22,7 @@ assignees: ""
 
 **Environment**
 
-- template-python version:
+- maybempi version:
 - Python version:
 - OS:
 
