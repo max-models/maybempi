@@ -207,27 +207,51 @@ def test_constants_and_handles():
     assert (MPI.Intracomm | None) is not None
 
 
+_COMPARE_WITH_MPI4PY = """
+import numpy as np
+from mpi4py import MPI as real
+
+from maybempi import get_mpi
+
+MPI = get_mpi(False)
+comm, self_comm = MPI.COMM_WORLD, real.COMM_SELF
+for call in (
+    lambda c: c.allreduce(5), lambda c: c.reduce(5), lambda c: c.scan(5),
+    lambda c: c.gather(3), lambda c: c.allgather(3), lambda c: c.scatter([4]),
+    lambda c: c.alltoall([4]), lambda c: c.exscan(3),
+    lambda c: c.sendrecv(6, dest=0, source=0), lambda c: c.Get_rank(), lambda c: c.Get_size(),
+):
+    assert call(self_comm) == call(comm)
+for name in ("Allreduce", "Reduce", "Scan", "Allgather", "Gather", "Alltoall"):
+    send = np.arange(3.0)
+    recv_real, recv_serial = np.zeros(3), np.zeros(3)
+    getattr(self_comm, name)(send, recv_real)
+    getattr(comm, name)(send, recv_serial)
+    np.testing.assert_array_equal(recv_real, recv_serial, err_msg=name)
+print("same results")
+"""  # fmt: skip
+
+
 def test_matches_mpi4py_on_one_process():
-    """The same calls on mpi4py's COMM_SELF give the same results (if mpi4py is there)."""
-    real = pytest.importorskip("mpi4py.MPI")
-    self_comm = real.COMM_SELF
-    assert self_comm.allreduce(5) == comm.allreduce(5)
-    assert self_comm.reduce(5) == comm.reduce(5)
-    assert self_comm.scan(5) == comm.scan(5)
-    assert self_comm.gather(3) == comm.gather(3)
-    assert self_comm.allgather(3) == comm.allgather(3)
-    assert self_comm.scatter([4]) == comm.scatter([4])
-    assert self_comm.alltoall([4]) == comm.alltoall([4])
-    assert self_comm.exscan(3) == comm.exscan(3)
-    assert self_comm.sendrecv(6, dest=0, source=0) == comm.sendrecv(6, dest=0, source=0)
-    assert self_comm.Get_rank() == comm.Get_rank()
-    assert self_comm.Get_size() == comm.Get_size()
-    for name in ("Allreduce", "Reduce", "Scan", "Allgather", "Gather", "Alltoall"):
-        send = np.arange(3.0)
-        recv_real, recv_serial = np.zeros(3), np.zeros(3)
-        getattr(self_comm, name)(send, recv_real)
-        getattr(comm, name)(send, recv_serial)
-        np.testing.assert_array_equal(recv_real, recv_serial, err_msg=name)
+    """The same calls on mpi4py's COMM_SELF give the same results (if mpi4py is there).
+
+    Runs in a child process: starting MPI inside pytest (a singleton MPI_Init) is
+    fragile with some MPI libraries (MPICH exits with an error code at shutdown).
+    """
+    import subprocess
+    import sys
+
+    pytest.importorskip("mpi4py")
+    result = subprocess.run(
+        [sys.executable, "-c", _COMPARE_WITH_MPI4PY],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "same results" in result.stdout
 
 
 def test_mpi4py_constants_next_to_real_mpi(monkeypatch):

@@ -23,7 +23,7 @@ Check what maybempi decides in an environment with the `maybempi` command (or
 
 ```bash
 maybempi                      # in a terminal: serial
-mpirun -n 2 maybempi --init   # each rank prints its rank and the launcher variable it saw
+mpirun -n 2 maybempi --init   # rank 0 prints one table: rank, host, launcher variable, ...
 ```
 
 ## From source
