@@ -109,6 +109,19 @@ def test_vector_collectives_use_the_displacement():
     np.testing.assert_array_equal(part, [2, 3])
 
 
+def test_alltoallv_copies_the_part_for_rank_0():
+    send = np.arange(5.0)
+    recv = np.zeros(5)
+    comm.Alltoallv([send, [3], [1], MPI.DOUBLE], [recv, [3], [2], MPI.DOUBLE])
+    np.testing.assert_array_equal(recv, [0, 0, 1, 2, 3])
+    recv[:] = 0
+    comm.Alltoallv([send, [5], None, None], [recv, [5], None, None])
+    np.testing.assert_array_equal(recv, send)
+    recv[:] = 7
+    comm.Alltoallv(MPI.IN_PLACE, [recv, [5], None, None])
+    np.testing.assert_array_equal(recv, 7)
+
+
 def test_buffer_errors():
     with pytest.raises(ValueError, match="too small"):
         comm.Allreduce(np.ones(3), np.zeros(2))
