@@ -5,6 +5,32 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Point-to-point messages from rank 0 to itself: `Send`/`Recv`, `Isend`/`Irecv`,
+  `Ssend`/`Issend`, `Bsend`/`Rsend`, the object versions (`send`, `recv`, `isend`, `irecv`,
+  `ssend`, `issend`), `Sendrecv_replace`, `Iprobe`/`Probe` and persistent requests
+  (`Send_init`, `Recv_init`, `Prequest.Start`). A send is kept, per communicator, until a
+  receive with a matching tag takes it, in the order sent; a receive that no message can
+  match raises `RuntimeError` where MPI would wait forever.
+- Requests with state: a receive completes when its message is sent; `Waitall`, `Waitany`,
+  `Waitsome`, `Testany`, `Testsome` and `testall`.
+- Groups (`Get_group`, `MPI.Group` with `Translate_ranks`, `Incl`, `Excl`, `Compare`, ...),
+  Cartesian communicators (`Create_cart`, `MPI.Cartcomm` with `Shift`, `Get_topo`,
+  `Get_cart_rank`, `Sub`, ...), `Split_type`, `Create`, `Create_group` and
+  `MPI.Compute_dims`.
+- Datatype sizes and derived datatypes (`Create_contiguous`, `Create_vector`,
+  `Create_subarray`), which select the elements of point-to-point buffers and file views.
+- `MPI.File`: MPI-IO on one process, with views, explicit offsets and file pointers.
+- `MPI.Status` records the source, tag and size of a received message.
+
+### Changed
+
+- `sendrecv`/`Sendrecv` go through the message queue: the object version returns a copy (as
+  mpi4py does), and a receive from rank 0 with nothing sent (e.g. `dest=PROC_NULL,
+  source=0`) raises `RuntimeError` instead of doing nothing. The default `source` and
+  `recvtag` are `ANY_SOURCE` and `ANY_TAG`, as in mpi4py.
+
 ### Fixed
 
 - `maybempi.__version__` is read from the installed package metadata (the version in

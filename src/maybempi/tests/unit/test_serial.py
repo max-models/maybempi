@@ -31,7 +31,7 @@ def test_object_collectives_return_the_value():
     assert comm.allgather(value) == [value]
     assert comm.scatter([value]) is value
     assert comm.alltoall([value]) == [value]
-    assert comm.sendrecv(value, dest=0, source=0) is value
+    assert comm.sendrecv(value, dest=0, source=0) == value  # a copy, as in mpi4py
     assert comm.ibcast(value).wait() is value
     assert comm.iallreduce(4).wait() == 4
     assert comm.Barrier() is None and comm.barrier() is None
@@ -47,13 +47,17 @@ def test_object_collectives_check_sizes_and_ranks():
     with pytest.raises(ValueError, match="only rank 0"):
         comm.sendrecv(1, dest=1)
     assert comm.sendrecv(1, dest=MPI.PROC_NULL, source=MPI.PROC_NULL) is None
-    assert comm.sendrecv(1, dest=MPI.PROC_NULL, source=0) is None
+    # nothing was sent to rank 0: MPI would wait forever
+    with pytest.raises(RuntimeError, match="wait forever"):
+        comm.sendrecv(1, dest=MPI.PROC_NULL, source=0)
+    assert comm.sendrecv(1, dest=0, source=MPI.PROC_NULL) is None
+    assert comm.recv(source=0) == 1  # the message sent above
 
 
 def test_unknown_methods_raise():
     # a stand-in returning None for everything hides missing support
     with pytest.raises(AttributeError):
-        _ = comm.Create_cart  # type: ignore[attr-defined]
+        _ = comm.Create_graph  # type: ignore[attr-defined]
     with pytest.raises(AttributeError):
         _ = MPI.Win  # type: ignore[attr-defined]
 
@@ -120,6 +124,13 @@ def test_alltoallv_copies_the_part_for_rank_0():
     recv[:] = 7
     comm.Alltoallv(MPI.IN_PLACE, [recv, [5], None, None])
     np.testing.assert_array_equal(recv, 7)
+    comm.Alltoallv([send, None, None, None], recv)  # no counts: everything
+    np.testing.assert_array_equal(recv, send)
+    comm.Alltoallv(send, recv)  # plain buffers: everything
+    np.testing.assert_array_equal(recv, send)
+    recv[:] = 0
+    comm.Allgatherv(send[:2], [recv, [2], MPI.DOUBLE])  # no displacements
+    np.testing.assert_array_equal(recv, [0, 1, 0, 0, 0])
 
 
 def test_buffer_errors():
@@ -129,7 +140,9 @@ def test_buffer_errors():
         comm.Allreduce(np.ones(2), np.zeros((2, 2))[:, 0])
     with pytest.raises(ValueError, match="only rank 0"):
         comm.Sendrecv(np.ones(2), dest=1, recvbuf=np.zeros(2))
-    comm.Sendrecv(np.ones(2), dest=MPI.PROC_NULL, recvbuf=np.zeros(2))
+    comm.Sendrecv(np.ones(2), dest=MPI.PROC_NULL, recvbuf=None, source=MPI.PROC_NULL)
+    with pytest.raises(RuntimeError, match="wait forever"):
+        comm.Sendrecv(np.ones(2), dest=MPI.PROC_NULL, recvbuf=np.zeros(2))
 
 
 class _DeviceArray:
@@ -283,10 +296,10 @@ def test_mpi4py_constants_next_to_real_mpi(monkeypatch):
     comm.Scatter(data, real.IN_PLACE)
     comm.Scatterv(data, real.IN_PLACE)
     np.testing.assert_array_equal(data, [0, 1, 2])
-    assert comm.sendrecv(1, dest=real.PROC_NULL, source=0) is None
+    assert comm.sendrecv(1, dest=real.PROC_NULL, source=real.PROC_NULL) is None
     assert comm.sendrecv(1, dest=0, source=real.ANY_SOURCE) == 1
     recv = np.zeros(3)
-    comm.Sendrecv(data, dest=real.PROC_NULL, recvbuf=recv)
+    comm.Sendrecv(data, dest=real.PROC_NULL, recvbuf=recv, source=real.PROC_NULL)
     np.testing.assert_array_equal(recv, 0)
     with pytest.raises(ValueError, match="only rank 0"):
         comm.bcast(1, root=5)
