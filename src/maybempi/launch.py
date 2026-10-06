@@ -167,7 +167,7 @@ def get_mpi(use_mpi: bool | None = None) -> Any:
     """
     global _AUTO_MPI
     if use_mpi is True:
-        from mpi4py import MPI
+        from mpi4py import MPI  # pyright: ignore[reportMissingImports]
 
         return MPI
     if use_mpi is False:
@@ -175,7 +175,7 @@ def get_mpi(use_mpi: bool | None = None) -> Any:
     if _AUTO_MPI is None:
         if launched_under_mpi():
             try:
-                from mpi4py import MPI as mpi
+                from mpi4py import MPI as mpi  # pyright: ignore[reportMissingImports]
             except ImportError:
                 warnings.warn(
                     "launched under an MPI launcher, but mpi4py is not installed: "
