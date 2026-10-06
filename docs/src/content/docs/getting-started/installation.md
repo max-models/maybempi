@@ -1,36 +1,42 @@
 ---
 title: Installation
-description: Create a Python environment and install maybempi.
+description: Install maybempi, with or without mpi4py.
 ---
 
-Create and activate a Python environment:
+maybempi is pure Python with no dependencies. It needs Python 3.10 or newer.
 
 ```bash
-python -m venv env
-source env/bin/activate
-pip install --upgrade pip
+pip install maybempi
 ```
 
-Install the package and its requirements with pip:
+To run under MPI, install mpi4py as well, built against the MPI library of your system:
 
 ```bash
-pip install -e .
+pip install "maybempi[mpi]"   # same as: pip install maybempi mpi4py
 ```
 
-Run the code with:
+Without mpi4py, every process of an `mpirun` job runs serially as rank 0 of 1, and
+`maybempi.get_mpi()` warns about it.
+
+Check what maybempi decides in an environment with the `maybempi` command (or
+`python -m maybempi`):
 
 ```bash
-maybempi
+maybempi                      # in a terminal: serial
+mpirun -n 2 maybempi --init   # each rank prints its rank and the launcher variable it saw
 ```
 
-## Optional extras
-
-| Extra  | Installs                                                |
-| ------ | ------------------------------------------------------- |
-| `test` | `pytest` and `coverage`                                 |
-| `docs` | the notebook runner and griffe for the API reference    |
-| `dev`  | formatters and linters, plus the `test` and `docs` extras |
+## From source
 
 ```bash
+git clone https://github.com/max-models/maybempi.git
+cd maybempi
 pip install -e ".[dev]"
 ```
+
+| Extra  | Installs                                                  |
+| ------ | --------------------------------------------------------- |
+| `mpi`  | `mpi4py`                                                  |
+| `test` | `pytest`, `pytest-cov` and NumPy                          |
+| `docs` | the notebook runner, NumPy and griffe for the API reference |
+| `dev`  | formatters and linters, plus the `test` and `docs` extras |

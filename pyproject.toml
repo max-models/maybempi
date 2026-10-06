@@ -6,23 +6,28 @@ requires = [ "setuptools", "wheel" ]
 [project]
 name = "maybempi"
 version = "0.1.0"
-description = "Template python repository."
+description = "Use MPI only when launched under MPI, and a serial stand-in for mpi4py otherwise."
 readme = "README.md"
-keywords = [ "python" ]
+keywords = [ "hpc", "mpi", "mpi4py", "parallel", "serial", "slurm" ]
 license = { file = "LICENSE.txt" }
 authors = [ { name = "Max" } ]
 requires-python = ">=3.10"
 classifiers = [
   "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering",
+  "Topic :: System :: Distributed Computing",
+  "Typing :: Typed",
 ]
-dependencies = [
-  "numpy",
-]
+dependencies = []
 
 optional-dependencies.dev = [
   "jupyterlab",
@@ -37,10 +42,14 @@ optional-dependencies.docs = [
   "ipykernel",
   "nbclient>=0.10",
   "nbformat>=5.10",
+  "numpy",
 ]
-optional-dependencies.test = [ "pytest", "pytest-cov" ]
+optional-dependencies.mpi = [ "mpi4py" ]
+optional-dependencies.test = [ "numpy", "pytest", "pytest-cov" ]
+urls."Documentation" = "https://max-models.github.io/maybempi/"
 urls."Source" = "https://github.com/max-models/maybempi"
-scripts.maybempi = "maybempi.main:main"
+urls."Changelog" = "https://github.com/max-models/maybempi/blob/main/CHANGELOG.md"
+scripts.maybempi = "maybempi.cli:main"
 
 [tool.setuptools.packages.find]
 where = [ "src" ]

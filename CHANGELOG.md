@@ -3,10 +3,21 @@
 All notable changes to this project are documented in this file and maintained manually. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.1.0] - 2026-10-05
+## [0.1.0] - 2026-10-06
 
 ### Added
 
-- Package layout with a console entry point and pytest tests.
-- Astro + Starlight documentation site with executed tutorials and a generated API reference.
-- GitHub Actions for tests, ruff, pyright, tutorials, documentation and PyPI publishing.
+- `get_mpi()`: `mpi4py.MPI` when the process was started by an MPI launcher, a serial stand-in
+  otherwise, decided once per process without importing mpi4py.
+- `launched_under_mpi()`, `launcher_variable()` and `local_rank()`, from the environment
+  variables of Open MPI, MPICH, Intel MPI, PMIx/`srun`, MVAPICH2, Hydra and Cray ALPS/PALS. A
+  plain `sbatch` batch script is not treated as an MPI launch. `MAYBEMPI=0`/`1` overrides the
+  decision.
+- `SerialMPI` and `SerialComm`: the module constants and communicator methods a serial run
+  needs, with the results MPI gives on one process. Unsupported methods raise `AttributeError`.
+  Buffers may be NumPy arrays, device arrays with `.get()` (such as CuPy) or mpi4py buffer
+  specifications; `set_copy_hook()` reports host-device copies.
+- `is_serial()` to tell the stand-in from mpi4py.
+- The `maybempi` command (and `python -m maybempi`), which prints the decision and why.
+
+The code comes from `cunumpy.mpi` (cunumpy 0.5), where the override variable was `CUNUMPY_MPI`.

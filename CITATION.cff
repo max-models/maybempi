@@ -2,11 +2,12 @@ cff-version: 1.2.0
 message: If you use this software, please cite it as below.
 type: software
 title: maybempi
+abstract: Use MPI only when launched under MPI, and a serial stand-in for mpi4py otherwise.
 authors:
   - family-names: Lindqvist
     given-names: Max
 version: 0.1.0
-date-released: "2026-10-05"
+date-released: "2026-10-06"
 repository-code: https://github.com/max-models/maybempi
 url: https://max-models.github.io/maybempi/
 license: MIT
