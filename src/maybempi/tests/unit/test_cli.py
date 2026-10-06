@@ -60,7 +60,8 @@ def test_columns_are_aligned():
 
 
 def test_reports_of_all_ranks():
-    base = cli.info(init=False) | {"MPI": "mpi4py", "size": 2}
+    # fixed values: the test must not depend on whether mpi4py is installed here
+    base = cli.info(init=False) | {"MPI": "mpi4py", "size": 2, "mpi4py installed": True}
     reports = [
         base | {"rank": 0, "local rank": 0, "launcher variable": "OMPI_COMM_WORLD_RANK"},
         base | {"rank": 1, "local rank": 1, "launcher variable": "OMPI_COMM_WORLD_RANK",
