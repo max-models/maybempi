@@ -6,6 +6,12 @@ return (object methods) or copy (buffer methods) what they would on one rank,
 never ``None`` in place of a value. Methods that are not implemented raise
 ``AttributeError`` instead of silently doing nothing.
 
+Point-to-point messages go from rank 0 to itself: a send is kept until a
+matching receive takes it, in order, by tag. A receive that no message can
+ever match raises ``RuntimeError`` where MPI would wait forever. Groups,
+Cartesian topologies, derived datatypes and ``MPI.File`` work as on one
+process.
+
 Buffers are NumPy-like arrays (``.reshape``, ``.flags``, ``.size``) or mpi4py
 buffer specifications (``[array, MPI.DOUBLE]``). A :class:`SerialComm` may also
 be used next to real MPI (e.g. for work done by one rank of an MPI job): it then
@@ -16,15 +22,37 @@ method, such as CuPy arrays, are copied to a host receive buffer with
 
 from __future__ import annotations
 
+import ctypes
+import math
+import pickle
 import socket
-import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from types import MappingProxyType
 from typing import Any
 
+from maybempi import _file
+from maybempi._datatypes import ORDER_C, ORDER_F, _buffer_runs, _Datatype
+from maybempi._file import SerialFile
+from maybempi._handles import (
+    _ANY_SOURCE,
+    _ANY_TAG,
+    _COMM_NULL,
+    _IN_PLACE,
+    _PROC_NULL,
+    _UNDEFINED,
+    _Constant,
+    _is_any_tag,
+    _is_proc_null,
+    _mpi4py_constant,
+    _Null,
+)
+
 __all__ = [
+    "SerialCartcomm",
     "SerialComm",
+    "SerialFile",
+    "SerialGroup",
     "SerialMPI",
     "SerialPrequest",
     "SerialRequest",
@@ -51,22 +79,9 @@ def set_copy_hook(hook: Callable[[str, Any], None] | None) -> None:
     _copy_hook = hook
 
 
-class _Constant:
-    """A named placeholder for an MPI constant (an op, a datatype, ``IN_PLACE``, ...)."""
-
-    __slots__ = ("name",)
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def __repr__(self) -> str:
-        return f"SerialMPI.{self.name}"
-
-
-class _Datatype(_Constant):
-    """Placeholder for an MPI datatype (``isinstance(t, MPI.Datatype)`` holds)."""
-
-    __slots__ = ()
+_CART = 1
+_GRAPH = 2
+_DIST_GRAPH = 3
 
 
 class _Op(_Constant):
@@ -75,36 +90,9 @@ class _Op(_Constant):
     __slots__ = ()
 
 
-class _Null(_Constant):
-    """A null handle (``COMM_NULL``, ``DATATYPE_NULL``, ...): false, like mpi4py's."""
-
-    __slots__ = ()
-
-    def __bool__(self) -> bool:
-        return False
-
-
-_IN_PLACE = _Constant("IN_PLACE")
-_COMM_NULL = _Null("COMM_NULL")
-_PROC_NULL = -2
-_ANY_SOURCE = -1
-_UNDEFINED = -32766
-
-
-def _mpi4py_constant(name: str) -> Any:
-    """Return ``mpi4py.MPI.<name>`` if the application imported mpi4py, else None."""
-    module = sys.modules.get("mpi4py.MPI")
-    return getattr(module, name, None) if module is not None else None
-
-
 def _is_in_place(obj: Any) -> bool:
     """Tell whether `obj` is ``IN_PLACE``, the stand-in's or mpi4py's."""
     return obj is _IN_PLACE or (obj is not None and obj is _mpi4py_constant("IN_PLACE"))
-
-
-def _is_proc_null(rank: Any) -> bool:
-    """Tell whether `rank` is ``PROC_NULL``, the stand-in's or mpi4py's."""
-    return rank == _PROC_NULL or rank == _mpi4py_constant("PROC_NULL")
 
 
 def _buffer(spec: Any) -> Any:
@@ -165,27 +153,69 @@ def _check_rank(rank: int, what: str) -> None:
         raise ValueError(f"{what}={rank}: a serial communicator has only rank 0")
 
 
-class SerialRequest:
-    """A completed request, returned by the non-blocking calls of :class:`SerialComm`."""
+def _fill_status(status: Any, source: int, tag: int, nbytes: int) -> None:
+    """Record the source, tag and size of a message in a status object, if given."""
+    if status is not None:
+        status._set(source, tag, nbytes)
 
-    def __init__(self, result: Any = None) -> None:
-        """Create a request whose ``wait()`` returns `result`."""
+
+class SerialRequest:
+    """A request of a non-blocking call of :class:`SerialComm`.
+
+    Collectives and sends complete at once. A receive (``Irecv``, ``irecv``)
+    or a synchronous send (``Issend``) completes when its matching message (or
+    receive) is posted. Waiting for a request that can never complete raises
+    ``RuntimeError``: on one process, MPI would wait forever.
+    """
+
+    def __init__(
+        self, result: Any = None, *, complete: bool = True, waiting_for: str = ""
+    ) -> None:
+        """Create a request; complete unless `complete` is False."""
         self._result = result
+        self._complete = complete
+        self._waiting_for = waiting_for
+        self._status: tuple[int, int, int] | None = None
+        self._cancel: Callable[[], None] | None = None
+
+    def _finish(
+        self, result: Any = None, status: tuple[int, int, int] | None = None
+    ) -> None:
+        """Complete the request with a result and the status of its message."""
+        self._result, self._status, self._complete = result, status, True
+
+    def _check(self, call: str) -> None:
+        if not self._complete:
+            raise RuntimeError(
+                f"{call} on rank 0 would wait forever: {self._waiting_for}. "
+                "In a serial run the matching call must already have been made.",
+            )
+
+    def _report(self, status: Any) -> None:
+        if self._status is not None:
+            _fill_status(status, *self._status)
 
     def Wait(self, status: Any = None) -> None:
-        """Return at once: the operation is complete."""
-        return None
+        """Return once the operation is complete (``RuntimeError`` if it never can)."""
+        self._check("Wait")
+        self._report(status)
 
     def Test(self, status: Any = None) -> bool:
-        """Return True: the operation is complete."""
-        return True
+        """Return whether the operation is complete."""
+        if self._complete:
+            self._report(status)
+        return self._complete
 
     def wait(self, status: Any = None) -> Any:
-        """Return the result of the non-blocking object call."""
+        """Return the result of the non-blocking object call (``RuntimeError`` if never)."""
+        self._check("wait")
+        self._report(status)
         return self._result
 
     def test(self, status: Any = None) -> tuple[bool, Any]:
-        """Return ``(True, result)``."""
+        """Return ``(True, result)`` when complete, else ``(False, None)``."""
+        if not self.Test(status):
+            return False, None
         return True, self._result
 
     def Free(self) -> None:
@@ -193,41 +223,197 @@ class SerialRequest:
         return None
 
     def Cancel(self) -> None:
-        """Do nothing: the operation is complete."""
-        return None
+        """Cancel a receive that has no message yet; nothing for a complete request."""
+        if not self._complete and self._cancel is not None:
+            self._cancel()
+            self._finish(None, (_ANY_SOURCE, _ANY_TAG, 0))
 
     @staticmethod
-    def Waitall(requests: Any, statuses: Any = None) -> None:
-        """Return at once: all requests are complete."""
-        return None
+    def Waitall(requests: Sequence[Any], statuses: Any = None) -> None:
+        """Wait for every request (``RuntimeError`` if one can never complete)."""
+        for index, request in enumerate(requests):
+            request.Wait(None if statuses is None else statuses[index])
 
     @staticmethod
-    def waitall(requests: Any, statuses: Any = None) -> list[Any]:
+    def waitall(requests: Sequence[Any], statuses: Any = None) -> list[Any]:
         """Return the results of the requests."""
-        return [request.wait() for request in requests]
+        return [
+            request.wait(None if statuses is None else statuses[index])
+            for index, request in enumerate(requests)
+        ]
 
     @staticmethod
-    def Testall(requests: Any, statuses: Any = None) -> bool:
-        """Return True: all requests are complete."""
-        return True
+    def Testall(requests: Sequence[Any], statuses: Any = None) -> bool:
+        """Return whether every request is complete."""
+        return all([request.Test() for request in requests])
 
     @staticmethod
-    def Waitany(requests: Any, status: Any = None) -> int:
-        """Return 0, or ``UNDEFINED`` for no requests."""
-        return 0 if requests else _UNDEFINED
+    def testall(requests: Sequence[Any], statuses: Any = None) -> tuple[bool, Any]:
+        """Return ``(True, results)`` when all are complete, else ``(False, None)``."""
+        if not SerialRequest.Testall(requests):
+            return False, None
+        return True, SerialRequest.waitall(requests, statuses)
+
+    @staticmethod
+    def Waitany(requests: Sequence[Any], status: Any = None) -> int:
+        """Return the index of a complete request, or ``UNDEFINED`` for no requests."""
+        if not requests:
+            return _UNDEFINED
+        for index, request in enumerate(requests):
+            if request.Test(status):
+                return index
+        requests[0].Wait()  # raises: none can complete
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    @staticmethod
+    def Testany(requests: Sequence[Any], status: Any = None) -> tuple[int, bool]:
+        """Return ``(index, True)`` for a complete request, else ``(UNDEFINED, ...)``."""
+        for index, request in enumerate(requests):
+            if request.Test(status):
+                return index, True
+        return _UNDEFINED, not requests
+
+    @staticmethod
+    def Waitsome(requests: Sequence[Any], statuses: Any = None) -> list[int] | None:
+        """Return the indices of the complete requests (``None`` for no requests)."""
+        if not requests:
+            return None
+        done = SerialRequest.Testsome(requests, statuses)
+        if not done:
+            requests[0].Wait()  # raises: none can complete
+        return done
+
+    @staticmethod
+    def Testsome(requests: Sequence[Any], statuses: Any = None) -> list[int] | None:
+        """Return the indices of the complete requests (``None`` for no requests)."""
+        if not requests:
+            return None
+        return [index for index, request in enumerate(requests) if request.Test()]
 
 
 class SerialPrequest(SerialRequest):
-    """A persistent request (``Send_init``/``Recv_init``), for ``Startall``/``Waitall``."""
+    """A persistent request (``Send_init``/``Recv_init``): each ``Start`` posts it again.
+
+    Before the first ``Start``, the request is inactive and complete.
+    """
+
+    def __init__(self, start: Callable[[], SerialRequest] | None = None) -> None:
+        """Create a persistent request that `start` posts."""
+        super().__init__()
+        self._start = start
+        self._active: SerialRequest | None = None
 
     def Start(self) -> None:
-        """Do nothing."""
-        return None
+        """Post the operation (a send or a receive)."""
+        if self._start is not None:
+            self._active = self._start()
 
     @staticmethod
-    def Startall(requests: Any) -> None:
-        """Do nothing."""
-        return None
+    def Startall(requests: Sequence[Any]) -> None:
+        """Start every request."""
+        for request in requests:
+            request.Start()
+
+    def Wait(self, status: Any = None) -> None:
+        """Wait for the started operation (at once if inactive)."""
+        if self._active is not None:
+            self._active.Wait(status)
+
+    def Test(self, status: Any = None) -> bool:
+        """Return whether the started operation is complete (True if inactive)."""
+        return self._active is None or self._active.Test(status)
+
+    def Cancel(self) -> None:
+        """Cancel the started operation."""
+        if self._active is not None:
+            self._active.Cancel()
+
+
+def _complete_now(request: SerialRequest, call: str) -> SerialRequest:
+    """Return a complete request, or withdraw it and raise: a blocking call never returns."""
+    if not request._complete:
+        request.Cancel()
+        raise RuntimeError(
+            f"{call} on rank 0 would wait forever: {request._waiting_for}. In a "
+            "serial run the matching call must already have been made.",
+        )
+    return request
+
+
+class _Message:
+    """A message from rank 0 to itself, kept until a receive takes it."""
+
+    def __init__(self, tag: int, data: Any, nbytes: int, is_object: bool) -> None:
+        self.tag = tag
+        self.data = data  # copies of the sent elements, or a pickle
+        self.nbytes = nbytes
+        self.is_object = is_object
+        self.on_receive: Callable[[], None] | None = None
+
+    @classmethod
+    def of_buffer(cls, buf: Any, tag: int) -> _Message:
+        array, runs = _buffer_runs(buf)
+        flat = array.reshape(-1)
+        pieces = [flat[start : start + length].copy() for start, length in runs]
+        count = sum(length for _, length in runs)
+        return cls(tag, pieces, count * array.itemsize, is_object=False)
+
+    @classmethod
+    def of_object(cls, obj: Any, tag: int) -> _Message:
+        data = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
+        return cls(tag, data, len(data), is_object=True)
+
+    def status(self) -> tuple[int, int, int]:
+        return 0, self.tag, self.nbytes
+
+    def unpack_buffer(self, buf: Any) -> None:
+        """Copy the message into the elements of the receive buffer `buf`."""
+        if self.is_object:
+            raise TypeError(
+                "a message sent with send/isend is received with recv/irecv"
+            )
+        array, runs = _buffer_runs(buf)
+        if not array.flags.c_contiguous:
+            raise ValueError("the receive buffer must be C-contiguous")
+        received = sum(piece.size for piece in self.data)
+        room = sum(length for _, length in runs)
+        if received > room:
+            raise ValueError(
+                f"message truncated: {received} elements for a receive buffer of {room}"
+            )
+        flat = array.reshape(-1)
+        targets = [flat[start : start + length] for start, length in runs]
+        _copy_pieces(self.data, targets)
+
+    def unpack_object(self) -> Any:
+        """Return the sent object."""
+        if not self.is_object:
+            raise TypeError(
+                "a message sent with Send/Isend is received with Recv/Irecv"
+            )
+        return pickle.loads(self.data)
+
+
+def _copy_pieces(sources: list[Any], targets: list[Any]) -> None:
+    """Copy the elements of the 1-D `sources` into the 1-D `targets`, in order."""
+    target_index, filled = 0, 0
+    for source in sources:
+        if hasattr(source, "get") and targets and not hasattr(targets[0], "get"):
+            source = source.get()
+            if _copy_hook is not None:
+                _copy_hook("to_host", source)
+        elif targets and hasattr(targets[0], "get") and not hasattr(source, "get"):
+            if _copy_hook is not None:
+                _copy_hook("to_device", source)
+        used = 0
+        while used < source.size:
+            target = targets[target_index]
+            take = min(source.size - used, target.size - filled)
+            target[filled : filled + take] = source[used : used + take]
+            used += take
+            filled += take
+            if filled == target.size:
+                target_index, filled = target_index + 1, 0
 
 
 class SerialComm:
@@ -236,9 +422,11 @@ class SerialComm:
     Collectives return (object methods) or copy (buffer methods) what they would
     on one rank: ``allreduce(x)`` is ``x``, ``gather(x)`` is ``[x]``,
     ``Allreduce(send, recv)`` copies `send` into `recv` (nothing with
-    ``IN_PLACE``), ``Bcast`` does nothing. Point-to-point calls are only
-    supported to and from rank 0 itself (``sendrecv``, ``Sendrecv``) or
-    ``PROC_NULL``. Other methods raise ``AttributeError``.
+    ``IN_PLACE``), ``Bcast`` does nothing. Point-to-point messages go to and
+    come from rank 0 itself or ``PROC_NULL``: a send is kept, per
+    communicator, until a receive with a matching tag takes it, in the order
+    sent. A blocking receive with no matching message raises ``RuntimeError``
+    (MPI would wait forever). Other methods raise ``AttributeError``.
 
     Attributes:
         rank: Always 0.
@@ -251,6 +439,8 @@ class SerialComm:
     def __init__(self, name: str = "COMM_WORLD") -> None:
         """Create a communicator named `name` (as ``Get_name`` returns it)."""
         self._name = name
+        self._messages: list[_Message] = []  # sent, not yet received
+        self._receives: list[tuple[int, Callable[[_Message], None]]] = []
 
     def __repr__(self) -> str:
         """Return ``SerialComm(<name>)``."""
@@ -277,6 +467,24 @@ class SerialComm:
         """Return True."""
         return True
 
+    def Get_group(self) -> SerialGroup:
+        """Return the group of the communicator: rank 0 only."""
+        return SerialGroup()
+
+    @property
+    def group(self) -> SerialGroup:
+        """The group of the communicator."""
+        return self.Get_group()
+
+    def Get_topology(self) -> int:
+        """Return ``UNDEFINED``: no topology."""
+        return _UNDEFINED
+
+    @property
+    def topology(self) -> int:
+        """The topology: ``UNDEFINED``."""
+        return self.Get_topology()
+
     # -------------------------------------------------- communicator creation
     def Dup(self, info: Any = None) -> SerialComm:
         """Return a new serial communicator with the same name."""
@@ -289,6 +497,37 @@ class SerialComm:
         if color == _UNDEFINED:
             return _COMM_NULL
         return SerialComm(self._name)
+
+    def Split_type(self, split_type: int, key: int = 0, info: Any = None) -> Any:
+        """Return a new serial communicator, or ``COMM_NULL`` for ``UNDEFINED``."""
+        return self.Split(split_type, key)
+
+    def Create(self, group: SerialGroup) -> Any:
+        """Return a communicator for `group`: a new one, or ``COMM_NULL`` if empty."""
+        return SerialComm(self._name) if group.Get_size() else _COMM_NULL
+
+    def Create_group(self, group: SerialGroup, tag: int = 0) -> Any:
+        """Return a communicator for `group`: a new one, or ``COMM_NULL`` if empty."""
+        return self.Create(group)
+
+    def Create_cart(
+        self,
+        dims: Sequence[int],
+        periods: Sequence[bool] | None = None,
+        reorder: bool = False,
+    ) -> SerialCartcomm:
+        """Return a Cartesian communicator; the dimensions must multiply to 1.
+
+        Raises:
+            ValueError: If the grid needs more than one process.
+        """
+        dims = [int(n) for n in dims]
+        if math.prod(dims) != 1:
+            raise ValueError(f"a {dims} process grid needs more than 1 process")
+        periods = [False] * len(dims) if periods is None else list(periods)
+        if len(periods) != len(dims):
+            raise ValueError(f"{len(periods)} periods for {len(dims)} dimensions")
+        return SerialCartcomm(dims, periods, self._name)
 
     def Free(self) -> None:
         """Do nothing."""
@@ -359,19 +598,20 @@ class SerialComm:
     def sendrecv(
         self,
         sendobj: Any,
-        dest: int = 0,
+        dest: int,
         sendtag: int = 0,
         recvbuf: Any = None,
-        source: int = 0,
-        recvtag: int = 0,
+        source: int = _ANY_SOURCE,
+        recvtag: int = _ANY_TAG,
         status: Any = None,
     ) -> Any:
-        """Return `sendobj` (sent to and received from rank 0), or None with ``PROC_NULL``."""
-        _check_rank(dest, "dest")
-        _check_rank(source, "source")
-        if _is_proc_null(source):
-            return None
-        return None if _is_proc_null(dest) else sendobj
+        """Send `sendobj` to `dest` and return the object received from `source`.
+
+        With ``dest=0, source=0`` that is a copy of `sendobj` (unless an earlier
+        message matches first); ``None`` with ``source=PROC_NULL``.
+        """
+        self.send(sendobj, dest, sendtag)
+        return self.recv(recvbuf, source, recvtag, status)
 
     def ibcast(self, obj: Any, root: int = 0) -> SerialRequest:
         """Return a completed request whose ``wait()`` returns `obj`."""
@@ -454,19 +694,236 @@ class SerialComm:
     def Sendrecv(
         self,
         sendbuf: Any,
-        dest: int = 0,
+        dest: int,
         sendtag: int = 0,
         recvbuf: Any = None,
-        source: int = 0,
-        recvtag: int = 0,
+        source: int = _ANY_SOURCE,
+        recvtag: int = _ANY_TAG,
         status: Any = None,
     ) -> None:
-        """Copy `sendbuf` into `recvbuf` (sent to and received from rank 0); nothing with ``PROC_NULL``."""
-        _check_rank(dest, "dest")
+        """Send `sendbuf` to `dest` and receive into `recvbuf` from `source`.
+
+        With ``dest=0, source=0`` that copies `sendbuf` into `recvbuf`; with
+        ``PROC_NULL`` the send or the receive does nothing.
+        """
+        self.Send(sendbuf, dest, sendtag)
+        self.Recv(recvbuf, source, recvtag, status)
+
+    def Sendrecv_replace(
+        self,
+        buf: Any,
+        dest: int,
+        sendtag: int = 0,
+        source: int = _ANY_SOURCE,
+        recvtag: int = _ANY_TAG,
+        status: Any = None,
+    ) -> None:
+        """Send `buf` to `dest`, then receive into `buf` from `source`."""
+        self.Sendrecv(buf, dest, sendtag, buf, source, recvtag, status)
+
+    # ------------------------------------------------------- point-to-point
+    def _post(self, message: _Message) -> None:
+        """Hand a message to the first matching receive, or keep it."""
+        for index, (tag, deliver) in enumerate(self._receives):
+            if _is_any_tag(tag) or tag == message.tag:
+                del self._receives[index]
+                deliver(message)
+                return
+        self._messages.append(message)
+
+    def _take(self, tag: int) -> _Message | None:
+        """Remove and return the first kept message with a matching tag."""
+        for index, message in enumerate(self._messages):
+            if _is_any_tag(tag) or tag == message.tag:
+                return self._messages.pop(index)
+        return None
+
+    def _waiting(self, call: str, tag: int) -> str:
+        which = "any tag" if _is_any_tag(tag) else f"tag {tag}"
+        return f"{call} waits for a message with {which} that rank 0 has not sent"
+
+    def _receive(
+        self,
+        source: int,
+        tag: int,
+        unpack: Callable[[_Message], Any],
+        call: str,
+    ) -> SerialRequest:
+        """Post a receive; the request completes with ``unpack(message)``."""
         _check_rank(source, "source")
-        if _is_proc_null(dest) or _is_proc_null(source):
+        request = SerialRequest(complete=False, waiting_for=self._waiting(call, tag))
+        if _is_proc_null(source):
+            request._finish(None, (_PROC_NULL, _ANY_TAG, 0))
+            return request
+
+        def deliver(message: _Message) -> None:
+            result = unpack(message)
+            request._finish(result, message.status())
+            if message.on_receive is not None:
+                message.on_receive()
+
+        message = self._take(tag)
+        if message is not None:
+            deliver(message)
+        else:
+            entry = (tag, deliver)
+            self._receives.append(entry)
+            request._cancel = lambda: self._receives.remove(entry)
+        return request
+
+    def _send(self, message: _Message, dest: int, synchronous: bool) -> SerialRequest:
+        """Post a send; a synchronous one completes when a receive takes it."""
+        _check_rank(dest, "dest")
+        request = SerialRequest()
+        if _is_proc_null(dest):
+            return request
+        if synchronous:
+            request = SerialRequest(
+                complete=False,
+                waiting_for=f"a synchronous send with tag {message.tag} waits for "
+                "a receive that rank 0 has not posted",
+            )
+            message.on_receive = request._finish
+        self._post(message)
+        return request
+
+    def Send(self, buf: Any, dest: int, tag: int = 0) -> None:
+        """Send `buf` to `dest` (0, or ``PROC_NULL``); kept until received."""
+        self.Isend(buf, dest, tag)
+
+    Bsend = Rsend = Send
+
+    def _check_receiver(self, call: str, dest: int, tag: int) -> None:
+        """Raise unless a posted receive would take a synchronous send at once."""
+        _check_rank(dest, "dest")
+        if _is_proc_null(dest):
             return
-        _copy(_buffer(sendbuf), _buffer(recvbuf))
+        if not any(_is_any_tag(want) or want == tag for want, _ in self._receives):
+            raise RuntimeError(
+                f"{call} on rank 0 would wait forever: no receive for tag {tag} "
+                "is posted. In a serial run the receive must be posted first "
+                "(Irecv), or use Send.",
+            )
+
+    def Ssend(self, buf: Any, dest: int, tag: int = 0) -> None:
+        """Send synchronously: a matching receive must already be posted."""
+        self._check_receiver("Ssend", dest, tag)
+        self.Send(buf, dest, tag)
+
+    def Isend(self, buf: Any, dest: int, tag: int = 0) -> SerialRequest:
+        """Send `buf` and return a completed request (the data are copied)."""
+        if _is_proc_null(dest):
+            return self._send(_Message(tag, [], 0, False), dest, False)
+        return self._send(_Message.of_buffer(buf, tag), dest, synchronous=False)
+
+    Ibsend = Irsend = Isend
+
+    def Issend(self, buf: Any, dest: int, tag: int = 0) -> SerialRequest:
+        """Send synchronously: the request completes when a receive takes it."""
+        if _is_proc_null(dest):
+            return self._send(_Message(tag, [], 0, False), dest, False)
+        return self._send(_Message.of_buffer(buf, tag), dest, synchronous=True)
+
+    def Recv(
+        self,
+        buf: Any,
+        source: int = _ANY_SOURCE,
+        tag: int = _ANY_TAG,
+        status: Any = None,
+    ) -> None:
+        """Receive into `buf` (``RuntimeError`` if no matching message was sent)."""
+        _complete_now(self.Irecv(buf, source, tag), "Recv").Wait(status)
+
+    def Irecv(
+        self, buf: Any, source: int = _ANY_SOURCE, tag: int = _ANY_TAG
+    ) -> SerialRequest:
+        """Post a receive into `buf`; complete once a matching message is sent."""
+        return self._receive(
+            source, tag, lambda message: message.unpack_buffer(buf), "a receive"
+        )
+
+    def send(self, obj: Any, dest: int, tag: int = 0) -> None:
+        """Send a (pickled) object to `dest`."""
+        self.isend(obj, dest, tag)
+
+    bsend = send
+
+    def ssend(self, obj: Any, dest: int, tag: int = 0) -> None:
+        """Send an object synchronously: a matching receive must be posted."""
+        self._check_receiver("ssend", dest, tag)
+        self.send(obj, dest, tag)
+
+    def isend(self, obj: Any, dest: int, tag: int = 0) -> SerialRequest:
+        """Send a (pickled) object and return a completed request."""
+        return self._send(_Message.of_object(obj, tag), dest, synchronous=False)
+
+    ibsend = isend
+
+    def issend(self, obj: Any, dest: int, tag: int = 0) -> SerialRequest:
+        """Send an object synchronously: complete when a receive takes it."""
+        return self._send(_Message.of_object(obj, tag), dest, synchronous=True)
+
+    def recv(
+        self,
+        buf: Any = None,
+        source: int = _ANY_SOURCE,
+        tag: int = _ANY_TAG,
+        status: Any = None,
+    ) -> Any:
+        """Return a received object (``None`` from ``PROC_NULL``)."""
+        return _complete_now(self.irecv(buf, source, tag), "recv").wait(status)
+
+    def irecv(
+        self, buf: Any = None, source: int = _ANY_SOURCE, tag: int = _ANY_TAG
+    ) -> SerialRequest:
+        """Post an object receive; ``wait()`` returns the object."""
+        return self._receive(
+            source, tag, lambda message: message.unpack_object(), "an object receive"
+        )
+
+    def Iprobe(
+        self, source: int = _ANY_SOURCE, tag: int = _ANY_TAG, status: Any = None
+    ) -> bool:
+        """Return whether a matching message is waiting, without receiving it."""
+        _check_rank(source, "source")
+        if _is_proc_null(source):
+            _fill_status(status, _PROC_NULL, _ANY_TAG, 0)
+            return True
+        for message in self._messages:
+            if _is_any_tag(tag) or tag == message.tag:
+                _fill_status(status, *message.status())
+                return True
+        return False
+
+    iprobe = Iprobe
+
+    def Probe(
+        self, source: int = _ANY_SOURCE, tag: int = _ANY_TAG, status: Any = None
+    ) -> bool:
+        """Return True for a waiting message (``RuntimeError`` if none was sent)."""
+        if not self.Iprobe(source, tag, status):
+            raise RuntimeError(
+                f"Probe on rank 0 would wait forever: {self._waiting('it', tag)}"
+            )
+        return True
+
+    probe = Probe
+
+    def Send_init(self, buf: Any, dest: int, tag: int = 0) -> SerialPrequest:
+        """Return a persistent send: each ``Start`` sends `buf`."""
+        return SerialPrequest(lambda: self.Isend(buf, dest, tag))
+
+    Bsend_init = Rsend_init = Send_init
+
+    def Ssend_init(self, buf: Any, dest: int, tag: int = 0) -> SerialPrequest:
+        """Return a persistent synchronous send."""
+        return SerialPrequest(lambda: self.Issend(buf, dest, tag))
+
+    def Recv_init(
+        self, buf: Any, source: int = _ANY_SOURCE, tag: int = _ANY_TAG
+    ) -> SerialPrequest:
+        """Return a persistent receive: each ``Start`` posts a receive into `buf`."""
+        return SerialPrequest(lambda: self.Irecv(buf, source, tag))
 
     def Ibcast(self, buf: Any, root: int = 0) -> SerialRequest:
         """Return a completed request (``Bcast`` does nothing)."""
@@ -485,23 +942,228 @@ class SerialComm:
 
 
 class SerialStatus:
-    """Stand-in for ``MPI.Status`` (source 0, tag 0)."""
+    """Stand-in for ``MPI.Status``: the source, tag and size of a received message."""
 
-    source = 0
-    tag = 0
-    error = 0
+    def __init__(self) -> None:
+        """Create a status of an empty message from rank 0 with tag 0."""
+        self.source = 0
+        self.tag = 0
+        self.error = 0
+        self.count = 0  # bytes, as mpi4py's Status.count
+
+    def _set(self, source: int, tag: int, nbytes: int) -> None:
+        self.source, self.tag, self.count = source, tag, nbytes
 
     def Get_source(self) -> int:
-        """Return 0."""
-        return 0
+        """Return the source rank (0, or ``PROC_NULL``)."""
+        return self.source
 
     def Get_tag(self) -> int:
-        """Return 0."""
-        return 0
+        """Return the tag of the message."""
+        return self.tag
+
+    def Get_error(self) -> int:
+        """Return 0 (``SUCCESS``)."""
+        return self.error
 
     def Get_count(self, datatype: Any = None) -> int:
-        """Return 0."""
+        """Return the number of `datatype` items received (bytes by default)."""
+        size = 1 if datatype is None else datatype.Get_size()
+        return self.count // size if size else 0
+
+    Get_elements = Get_count
+
+    def Is_cancelled(self) -> bool:
+        """Return False."""
+        return False
+
+
+class SerialGroup:
+    """Stand-in for ``MPI.Group``: rank 0 alone, or the empty group."""
+
+    def __init__(self, size: int = 1) -> None:
+        """Create the group of rank 0 (`size` 1) or the empty group (`size` 0)."""
+        self._size = size
+
+    def __repr__(self) -> str:
+        """Return ``SerialGroup(size=<size>)``."""
+        return f"SerialGroup(size={self._size})"
+
+    def Get_size(self) -> int:
+        """Return 1, or 0 for the empty group."""
+        return self._size
+
+    def Get_rank(self) -> int:
+        """Return 0, or ``UNDEFINED`` for the empty group."""
+        return 0 if self._size else _UNDEFINED
+
+    @property
+    def size(self) -> int:
+        """The number of ranks."""
+        return self.Get_size()
+
+    @property
+    def rank(self) -> int:
+        """The rank of this process in the group."""
+        return self.Get_rank()
+
+    def Translate_ranks(
+        self, ranks: Sequence[int] | None = None, group: SerialGroup | None = None
+    ) -> list[int]:
+        """Return the ranks in `group` of `ranks` of this group (0 stays 0)."""
+        ranks = list(range(self._size)) if ranks is None else list(ranks)
+        target = 1 if group is None else group.Get_size()
+        translated = []
+        for rank in ranks:
+            if _is_proc_null(rank):
+                translated.append(rank)
+            elif rank == 0 and self._size:
+                translated.append(0 if target else _UNDEFINED)
+            else:
+                raise ValueError(f"rank {rank} is not in a group of size {self._size}")
+        return translated
+
+    def Compare(self, group: SerialGroup) -> int:
+        """Return ``IDENT`` for groups of the same size, else ``UNEQUAL``."""
+        return 0 if self._size == group.Get_size() else 3
+
+    def Incl(self, ranks: Sequence[int]) -> SerialGroup:
+        """Return the group of `ranks`: ``[0]`` or ``[]``."""
+        self.Translate_ranks(ranks)
+        return SerialGroup(1 if list(ranks) else 0)
+
+    def Excl(self, ranks: Sequence[int]) -> SerialGroup:
+        """Return the group without `ranks`."""
+        self.Translate_ranks(ranks)
+        return SerialGroup(0 if list(ranks) else self._size)
+
+    @staticmethod
+    def Union(group1: SerialGroup, group2: SerialGroup) -> SerialGroup:
+        """Return the union of two groups."""
+        return SerialGroup(max(group1.Get_size(), group2.Get_size()))
+
+    @staticmethod
+    def Intersection(group1: SerialGroup, group2: SerialGroup) -> SerialGroup:
+        """Return the intersection of two groups."""
+        return SerialGroup(min(group1.Get_size(), group2.Get_size()))
+
+    @staticmethod
+    def Difference(group1: SerialGroup, group2: SerialGroup) -> SerialGroup:
+        """Return the ranks of `group1` that are not in `group2`."""
+        return SerialGroup(group1.Get_size() if not group2.Get_size() else 0)
+
+    def Dup(self) -> SerialGroup:
+        """Return a copy."""
+        return SerialGroup(self._size)
+
+    def Free(self) -> None:
+        """Do nothing."""
+        return None
+
+
+class SerialCartcomm(SerialComm):
+    """Stand-in for ``MPI.Cartcomm``: a Cartesian grid of one process.
+
+    Every dimension has length 1. Along a periodic dimension rank 0 is its own
+    neighbour; along the others ``Shift`` gives ``PROC_NULL``.
+    """
+
+    def __init__(
+        self,
+        dims: Sequence[int],
+        periods: Sequence[bool | int],
+        name: str = "COMM_WORLD",
+    ) -> None:
+        """Create a grid with `dims` (all 1) and `periods`."""
+        super().__init__(name)
+        self._dims = [int(n) for n in dims]
+        self._periods = [int(bool(p)) for p in periods]
+
+    def __repr__(self) -> str:
+        """Return ``SerialCartcomm(<name>, dims=..., periods=...)``."""
+        return (
+            f"SerialCartcomm({self._name}, dims={self._dims}, periods={self._periods})"
+        )
+
+    def Dup(self, info: Any = None) -> SerialCartcomm:
+        """Return a new Cartesian communicator with the same grid."""
+        return SerialCartcomm(self._dims, self._periods, self._name)
+
+    Clone = Dup
+
+    def Get_topology(self) -> int:
+        """Return ``CART``."""
+        return _CART
+
+    def Get_dim(self) -> int:
+        """Return the number of dimensions."""
+        return len(self._dims)
+
+    @property
+    def ndim(self) -> int:
+        """The number of dimensions."""
+        return self.Get_dim()
+
+    @property
+    def dims(self) -> list[int]:
+        """The processes along each dimension (all 1)."""
+        return list(self._dims)
+
+    @property
+    def periods(self) -> list[int]:
+        """Whether each dimension is periodic, as 0 or 1."""
+        return list(self._periods)
+
+    @property
+    def coords(self) -> list[int]:
+        """The coordinates of this process (all 0)."""
+        return [0] * len(self._dims)
+
+    def Get_topo(self) -> tuple[list[int], list[int], list[int]]:
+        """Return ``(dims, periods, coords)``."""
+        return self.dims, self.periods, self.coords
+
+    @property
+    def topo(self) -> tuple[list[int], list[int], list[int]]:
+        """``(dims, periods, coords)``."""
+        return self.Get_topo()
+
+    def Get_coords(self, rank: int) -> list[int]:
+        """Return the coordinates of `rank` (only 0 exists)."""
+        if rank != 0:
+            raise ValueError(f"rank={rank}: a serial communicator has only rank 0")
+        return self.coords
+
+    def Get_cart_rank(self, coords: Sequence[int]) -> int:
+        """Return 0 for coordinates on the grid (any along periodic dimensions)."""
+        coords = list(coords)
+        if len(coords) != len(self._dims):
+            raise ValueError(
+                f"{len(coords)} coordinates for {len(self._dims)} dimensions"
+            )
+        for coord, periodic in zip(coords, self._periods, strict=True):
+            if coord != 0 and not periodic:
+                raise ValueError(f"coordinates {coords} are outside the grid")
         return 0
+
+    def Shift(self, direction: int, disp: int) -> tuple[int, int]:
+        """Return ``(source, dest)``: 0 along periodic dimensions, else ``PROC_NULL``."""
+        if not 0 <= direction < len(self._dims):
+            raise ValueError(f"direction {direction} for {len(self._dims)} dimensions")
+        if self._periods[direction] or disp == 0:
+            return 0, 0
+        return _PROC_NULL, _PROC_NULL
+
+    def Sub(self, remain_dims: Sequence[bool]) -> SerialCartcomm:
+        """Return the grid of the dimensions in `remain_dims`."""
+        keep = list(remain_dims)
+        if len(keep) != len(self._dims):
+            raise ValueError(f"{len(keep)} flags for {len(self._dims)} dimensions")
+        return SerialCartcomm(
+            [n for n, k in zip(self._dims, keep, strict=True) if k],
+            [bool(p) for p, k in zip(self._periods, keep, strict=True) if k],
+            self._name,
+        )
 
 
 class SerialMPI:
@@ -519,11 +1181,55 @@ class SerialMPI:
     COMM_SELF = SerialComm("COMM_SELF")
     COMM_NULL = _COMM_NULL
     Comm = Intracomm = SerialComm
+    Cartcomm = SerialCartcomm
+    Group = SerialGroup
     Request = SerialRequest
     Prequest = SerialPrequest
     Status = SerialStatus
     Datatype = _Datatype
     Op = _Op
+    File = SerialFile
+
+    GROUP_EMPTY = SerialGroup(0)
+    GROUP_NULL = _Null("GROUP_NULL")
+    FILE_NULL = _file.FILE_NULL
+    INFO_NULL = _Null("INFO_NULL")
+    INFO_ENV = _Constant("INFO_ENV")
+
+    # comparisons of groups and communicators
+    IDENT = 0
+    CONGRUENT = 1
+    SIMILAR = 2
+    UNEQUAL = 3
+
+    # topologies and communicator splitting
+    CART = _CART
+    GRAPH = _GRAPH
+    DIST_GRAPH = _DIST_GRAPH
+    COMM_TYPE_SHARED = 0
+
+    # thread support levels
+    THREAD_SINGLE = 0
+    THREAD_FUNNELED = 1
+    THREAD_SERIALIZED = 2
+    THREAD_MULTIPLE = 3
+
+    # subarray order and MPI-IO modes
+    ORDER_C = ORDER_C
+    ORDER_F = ORDER_F
+    ORDER_FORTRAN = ORDER_F
+    MODE_CREATE = _file.MODE_CREATE
+    MODE_RDONLY = _file.MODE_RDONLY
+    MODE_WRONLY = _file.MODE_WRONLY
+    MODE_RDWR = _file.MODE_RDWR
+    MODE_DELETE_ON_CLOSE = _file.MODE_DELETE_ON_CLOSE
+    MODE_UNIQUE_OPEN = _file.MODE_UNIQUE_OPEN
+    MODE_EXCL = _file.MODE_EXCL
+    MODE_APPEND = _file.MODE_APPEND
+    MODE_SEQUENTIAL = _file.MODE_SEQUENTIAL
+    SEEK_SET = _file.SEEK_SET
+    SEEK_CUR = _file.SEEK_CUR
+    SEEK_END = _file.SEEK_END
 
     IN_PLACE = _IN_PLACE
     BOTTOM = _Constant("BOTTOM")
@@ -532,7 +1238,7 @@ class SerialMPI:
     OP_NULL = _Null("OP_NULL")
     PROC_NULL = _PROC_NULL
     ANY_SOURCE = _ANY_SOURCE
-    ANY_TAG = -1
+    ANY_TAG = _ANY_TAG
     ROOT = -3
     UNDEFINED = _UNDEFINED
     SUCCESS = 0
@@ -553,30 +1259,30 @@ class SerialMPI:
     REPLACE = _Op("REPLACE")
 
     # datatypes
-    BYTE = _Datatype("BYTE")
-    CHAR = _Datatype("CHAR")
-    BOOL = _Datatype("BOOL")
-    C_BOOL = _Datatype("C_BOOL")
-    INT = _Datatype("INT")
-    LONG = _Datatype("LONG")
-    LONG_LONG = _Datatype("LONG_LONG")
-    UNSIGNED = _Datatype("UNSIGNED")
-    UNSIGNED_LONG = _Datatype("UNSIGNED_LONG")
-    INT8_T = _Datatype("INT8_T")
-    INT16_T = _Datatype("INT16_T")
-    INT32_T = _Datatype("INT32_T")
-    INT64_T = _Datatype("INT64_T")
-    UINT8_T = _Datatype("UINT8_T")
-    UINT16_T = _Datatype("UINT16_T")
-    UINT32_T = _Datatype("UINT32_T")
-    UINT64_T = _Datatype("UINT64_T")
-    FLOAT = _Datatype("FLOAT")
-    DOUBLE = _Datatype("DOUBLE")
-    LONG_DOUBLE = _Datatype("LONG_DOUBLE")
-    C_FLOAT_COMPLEX = _Datatype("C_FLOAT_COMPLEX")
-    C_DOUBLE_COMPLEX = _Datatype("C_DOUBLE_COMPLEX")
-    COMPLEX = _Datatype("COMPLEX")
-    DOUBLE_COMPLEX = _Datatype("DOUBLE_COMPLEX")
+    BYTE = _Datatype("BYTE", 1)
+    CHAR = _Datatype("CHAR", 1)
+    BOOL = _Datatype("BOOL", 1)
+    C_BOOL = _Datatype("C_BOOL", 1)
+    INT = _Datatype("INT", ctypes.sizeof(ctypes.c_int))
+    LONG = _Datatype("LONG", ctypes.sizeof(ctypes.c_long))
+    LONG_LONG = _Datatype("LONG_LONG", 8)
+    UNSIGNED = _Datatype("UNSIGNED", ctypes.sizeof(ctypes.c_uint))
+    UNSIGNED_LONG = _Datatype("UNSIGNED_LONG", ctypes.sizeof(ctypes.c_ulong))
+    INT8_T = _Datatype("INT8_T", 1)
+    INT16_T = _Datatype("INT16_T", 2)
+    INT32_T = _Datatype("INT32_T", 4)
+    INT64_T = _Datatype("INT64_T", 8)
+    UINT8_T = _Datatype("UINT8_T", 1)
+    UINT16_T = _Datatype("UINT16_T", 2)
+    UINT32_T = _Datatype("UINT32_T", 4)
+    UINT64_T = _Datatype("UINT64_T", 8)
+    FLOAT = _Datatype("FLOAT", 4)
+    DOUBLE = _Datatype("DOUBLE", 8)
+    LONG_DOUBLE = _Datatype("LONG_DOUBLE", ctypes.sizeof(ctypes.c_longdouble))
+    C_FLOAT_COMPLEX = _Datatype("C_FLOAT_COMPLEX", 8)
+    C_DOUBLE_COMPLEX = _Datatype("C_DOUBLE_COMPLEX", 16)
+    COMPLEX = _Datatype("COMPLEX", 8)
+    DOUBLE_COMPLEX = _Datatype("DOUBLE_COMPLEX", 16)
 
     # NumPy type characters to datatypes, like mpi4py's (private) MPI._typedict
     _typedict = MappingProxyType({
@@ -624,6 +1330,26 @@ class SerialMPI:
     def Get_processor_name() -> str:
         """Return the host name."""
         return socket.gethostname()
+
+    @staticmethod
+    def Get_version() -> tuple[int, int]:
+        """Return ``(4, 0)``: the MPI standard the stand-in follows."""
+        return 4, 0
+
+    @staticmethod
+    def Compute_dims(nnodes: int, dims: int | Sequence[int]) -> list[int]:
+        """Return a process grid for `nnodes` (1) processes: all ones.
+
+        Raises:
+            ValueError: For a number of processes other than 1.
+        """
+        count = dims if isinstance(dims, int) else len(dims)
+        if nnodes != 1:
+            raise ValueError(f"a serial run has 1 process, not {nnodes}")
+        given = [0] * count if isinstance(dims, int) else list(dims)
+        if any(n not in (0, 1) for n in given):
+            raise ValueError(f"dims {given} do not fit 1 process")
+        return [1] * count
 
     @staticmethod
     def Query_thread() -> int:
