@@ -1,98 +1,46 @@
 // @ts-check
-import { defineConfig } from 'astro/config';
-import { unified } from '@astrojs/markdown-remark';
-import starlight from '@astrojs/starlight';
-import starlightLinksValidator from 'starlight-links-validator';
-import starlightPydocs, { pydocsSidebarGroup } from 'starlight-pydocs';
-import rehypeKatex from 'rehype-katex';
-import remarkMath from 'remark-math';
+// The shared max-models docs setup (@max-models/starlight-theme): served at
+// https://max-models.github.io/maybempi/, with math, the API reference and a link check.
+import { defineDocs } from '@max-models/starlight-theme';
 
-// The site is served at https://max-models.github.io/maybempi/ by GitHub Pages.
-const base = '/maybempi';
-
-// The Python package documented under "API reference" (the directory name in src/).
-const pythonPackage = 'maybempi';
-
-export default defineConfig({
-	site: 'https://max-models.github.io',
-	base,
-	markdown: {
-		// $...$ and $$...$$ math in Markdown and MDX pages, rendered with KaTeX at build time
-		processor: unified({ remarkPlugins: [remarkMath], rehypePlugins: [rehypeKatex] }),
-	},
-	integrations: [
-		starlight({
-			title: 'maybempi',
-			description: 'Use MPI only when launched under MPI, and a serial stand-in for mpi4py otherwise.',
-			customCss: ['katex/dist/katex.min.css', './src/styles/custom.css'],
-			components: {
-				Header: './src/components/Header.astro',
-			},
-			social: [
-				{ icon: 'github', label: 'GitHub', href: 'https://github.com/max-models/maybempi' },
+export default defineDocs({
+	repo: 'maybempi',
+	title: 'maybempi',
+	description: 'Use MPI only when launched under MPI, and a serial stand-in for mpi4py otherwise.',
+	pythonPackage: 'maybempi',
+	nav: [
+		{ label: 'Getting started', link: '/getting-started/installation/' },
+		{ label: 'Guides', link: '/guides/detection/' },
+		{ label: 'Tutorials', link: '/tutorials/' },
+		{ label: 'Development', link: '/development/docs/' },
+		{ label: 'API', link: '/api/maybempi/' },
+	],
+	sidebar: [
+		{
+			label: 'Getting started',
+			items: [
+				{ label: 'Installation', slug: 'getting-started/installation' },
+				{ label: 'Quickstart', slug: 'getting-started/quickstart' },
 			],
-			editLink: { baseUrl: 'https://github.com/max-models/maybempi/edit/devel/docs/' },
-			lastUpdated: true,
-			plugins: [
-				starlightPydocs({
-					packages: [
-						{
-							name: pythonPackage,
-							label: 'All modules',
-							search: ['../src'],
-							docstringStyle: 'google',
-							members: {
-								exclude: [`${pythonPackage}.tests`, `${pythonPackage}.tests.*`],
-							},
-							sourceLink: {
-								host: 'github',
-								repo: 'max-models/maybempi',
-								ref: 'devel',
-								root: '..',
-							},
-							sidebar: { collapsed: false },
-						},
-					],
-					// The interpreter griffe runs in (set by `make docs-*`); falls back to uvx / python.
-					runner: process.env.DOCS_PYTHON ? { python: process.env.DOCS_PYTHON } : undefined,
-					inventories: ['python', { url: 'https://numpy.org/doc/stable/objects.inv' }],
-				}),
-				...(process.env.DOCS_VALIDATE_LINKS === 'false'
-					? []
-					: [starlightLinksValidator({ errorOnLocalLinks: false, exclude: [`${base}/api/**`, '/api/**'] })]),
+		},
+		{
+			label: 'Guides',
+			items: [
+				{ label: 'How the decision is made', slug: 'guides/detection' },
+				{ label: 'The serial stand-in', slug: 'guides/serial-stand-in' },
+				{ label: 'Using maybempi in a library', slug: 'guides/libraries' },
 			],
-			sidebar: [
-				{
-					label: 'Getting started',
-					items: [
-						{ label: 'Installation', slug: 'getting-started/installation' },
-						{ label: 'Quickstart', slug: 'getting-started/quickstart' },
-					],
-				},
-				{
-					label: 'Guides',
-					items: [
-						{ label: 'How the decision is made', slug: 'guides/detection' },
-						{ label: 'The serial stand-in', slug: 'guides/serial-stand-in' },
-						{ label: 'Using maybempi in a library', slug: 'guides/libraries' },
-					],
-				},
-				{
-					label: 'Tutorials',
-					items: [{ autogenerate: { directory: 'tutorials' } }],
-				},
-				{
-					label: 'Development',
-					items: [
-						{ label: 'Building the docs', slug: 'development/docs' },
-						{ label: 'Publishing', slug: 'development/publishing' },
-					],
-				},
-				{
-					label: 'API reference',
-					items: [pydocsSidebarGroup],
-				},
+		},
+		{
+			label: 'Tutorials',
+			items: [{ autogenerate: { directory: 'tutorials' } }],
+		},
+		{
+			label: 'Development',
+			items: [
+				{ label: 'Building the docs', slug: 'development/docs' },
+				{ label: 'Publishing', slug: 'development/publishing' },
 			],
-		}),
+		},
 	],
 });

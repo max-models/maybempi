@@ -62,7 +62,6 @@ lint.select = [ "B", "D", "E", "F", "I", "UP", "W" ]
 lint.ignore = [ "E501" ]  # line length is handled by the formatter
 lint.per-file-ignores."**/tests/**" = [ "D" ]
 lint.per-file-ignores."*.ipynb" = [ "D" ]
-lint.per-file-ignores."docs/tools/*" = [ "D" ]
 lint.pydocstyle.convention = "google"
 
 [tool.pyright]
