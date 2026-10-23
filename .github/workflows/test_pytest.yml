@@ -99,3 +99,33 @@ jobs:
           if [ "${{ matrix.mpi }}" = "openmpi" ]; then OVERSUBSCRIBE=--oversubscribe; fi
           mpiexec -n 2 $OVERSUBSCRIBE .venv/bin/python -m pytest -q -p no:cacheprovider src/maybempi/tests/mpi
           mpiexec -n 2 $OVERSUBSCRIBE .venv/bin/maybempi --init
+
+  # petsc_comm with a real petsc4py: PETSc, petsc4py, mpi4py and Open MPI from conda-forge.
+  petsc:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up PETSc, petsc4py and MPI
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: petsc
+          create-args: python=3.12 petsc4py mpi4py openmpi
+          cache-environment: true
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install project
+        run: uv pip install --python "$(which python)" -e ".[test]"
+
+      - name: Unit tests and tests under mpiexec -n 2
+        env:
+          OMP_NUM_THREADS: "1"
+        run: |
+          python -c "from petsc4py import PETSc; print(PETSc.Sys.getVersion())"
+          python -m pytest -q src/maybempi/tests
+          mpiexec -n 2 --oversubscribe python -m pytest -q -p no:cacheprovider src/maybempi/tests/mpi

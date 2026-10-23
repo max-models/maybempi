@@ -14,7 +14,8 @@ environment the launcher sets up, without importing mpi4py, and returns either
 ``from maybempi import MPI`` is the drop-in replacement for ``from mpi4py import
 MPI``: the name resolves to ``get_mpi()`` when it is first imported.
 
-:mod:`maybempi.launch` holds the detection, :mod:`maybempi.serial` the stand-in.
+:mod:`maybempi.launch` holds the detection, :mod:`maybempi.serial` the stand-in,
+:mod:`maybempi.petsc` the conversion of a communicator for petsc4py.
 """
 
 from importlib.metadata import PackageNotFoundError, version
@@ -30,6 +31,7 @@ from maybempi.launch import (
     launcher_variable,
     local_rank,
 )
+from maybempi.petsc import petsc_comm
 from maybempi.serial import (
     SerialCartcomm,
     SerialComm,
@@ -65,6 +67,7 @@ __all__ = [
     "launched_under_mpi",
     "launcher_variable",
     "local_rank",
+    "petsc_comm",
     "set_copy_hook",
 ]
 

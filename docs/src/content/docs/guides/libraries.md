@@ -49,6 +49,26 @@ else:
     run_distributed_solver(comm)
 ```
 
+## PETSc
+
+petsc4py takes mpi4py communicators but not the stand-in. `maybempi.petsc_comm` converts
+either: the stand-in, and any communicator of one process, become `PETSc.COMM_SELF`, so a
+serial run does not import mpi4py; larger communicators are wrapped with `PETSc.Comm(comm)`,
+which shares the MPI communicator rather than duplicating it:
+
+```python
+from petsc4py import PETSc
+
+import maybempi
+
+comm = maybempi.petsc_comm(MPI.COMM_WORLD)  # or petsc_comm() for COMM_WORLD
+matrix = PETSc.Mat().createAIJ(size=((local, total), (local, total)), comm=comm)
+```
+
+petsc4py is not a dependency of maybempi; `petsc_comm` imports it when called and raises an
+`ImportError` that says how to install it otherwise. Importing `petsc4py.PETSc` initializes
+PETSc, and MPI too if PETSc was built with MPI, so call it only where PETSc is used.
+
 ## Tests
 
 Tests can force either mode without a launcher: `maybempi.get_mpi(False)` returns the stand-in,

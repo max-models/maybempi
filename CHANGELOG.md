@@ -7,6 +7,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `maybempi.petsc_comm(comm)`: the petsc4py communicator for a maybempi or mpi4py
+  communicator, `PETSc.COMM_SELF` for the serial stand-in and for one process,
+  `PETSc.Comm(comm)` otherwise. petsc4py is imported only when it is called.
 - Point-to-point messages from rank 0 to itself: `Send`/`Recv`, `Isend`/`Irecv`,
   `Ssend`/`Issend`, `Bsend`/`Rsend`, the object versions (`send`, `recv`, `isend`, `irecv`,
   `ssend`, `issend`), `Sendrecv_replace`, `Iprobe`/`Probe` and persistent requests
