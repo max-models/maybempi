@@ -49,9 +49,7 @@ def test_serial_comm_is_comm_self(fake_petsc):
 
 
 def test_default_is_comm_world_of_get_mpi(fake_petsc, monkeypatch):
-    monkeypatch.setattr(
-        maybempi.petsc, "get_mpi", lambda: maybempi.get_mpi(False)
-    )
+    monkeypatch.setattr(maybempi.petsc, "get_mpi", lambda: maybempi.get_mpi(False))
     assert petsc_comm() is fake_petsc.COMM_SELF
 
 
