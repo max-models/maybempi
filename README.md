@@ -42,6 +42,9 @@ one process: `allreduce(x)` is `x`, `gather(x)` is `[x]`,
 - `maybempi.is_serial(MPI)` tells the stand-in from mpi4py.
 - `maybempi.local_rank()` gives the node-local rank before `MPI_Init`,
   e.g. to pick a GPU.
+- `maybempi.petsc_comm(comm)` gives the petsc4py communicator:
+  `PETSc.COMM_SELF` for the stand-in or one process, `PETSc.Comm(comm)`
+  otherwise (petsc4py is optional).
 - The `maybempi` command prints what it decides, and why:
   `mpirun -n 2 maybempi --init`.
 

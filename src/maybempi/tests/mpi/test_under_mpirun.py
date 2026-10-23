@@ -18,6 +18,7 @@ under_mpi = pytest.mark.skipif(
     not maybempi.launched_under_mpi(), reason="not launched under an MPI launcher"
 )
 has_mpi = importlib.util.find_spec("mpi4py") is not None and shutil.which("mpiexec")
+has_petsc4py = importlib.util.find_spec("petsc4py") is not None
 
 
 @under_mpi
@@ -44,6 +45,25 @@ def test_local_rank_matches_the_node_communicator():
     MPI = maybempi.get_mpi()
     node = MPI.COMM_WORLD.Split_type(MPI.COMM_TYPE_SHARED)
     assert maybempi.local_rank() == node.Get_rank()
+
+
+@under_mpi
+@pytest.mark.skipif(not has_petsc4py, reason="needs petsc4py")
+def test_petsc_comm_spans_the_ranks():
+    from petsc4py import PETSc
+
+    MPI = maybempi.get_mpi()
+    comm = MPI.COMM_WORLD
+    rank, size = comm.Get_rank(), comm.Get_size()
+    petsc = maybempi.petsc_comm(comm)
+    assert (petsc.getRank(), petsc.getSize()) == (rank, size)
+    if size > 1:  # the same communicator, not a duplicate
+        assert MPI.Comm.Compare(petsc.tompi4py(), comm) == MPI.IDENT
+    vector = PETSc.Vec().createMPI((1, PETSc.DECIDE), comm=petsc)
+    vector.set(float(rank + 1))
+    assert vector.sum() == pytest.approx(size * (size + 1) / 2)
+    vector.destroy()
+    assert maybempi.petsc_comm(MPI.COMM_SELF) == PETSc.COMM_SELF
 
 
 @pytest.mark.skipif(maybempi.launched_under_mpi(), reason="already under a launcher")
