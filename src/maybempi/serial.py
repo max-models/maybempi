@@ -340,6 +340,28 @@ def _complete_now(request: SerialRequest, call: str) -> SerialRequest:
     return request
 
 
+def _copy_pieces(sources: list[Any], targets: list[Any]) -> None:
+    """Copy the elements of the 1-D `sources` into the 1-D `targets`, in order."""
+    target_index, filled = 0, 0
+    for source in sources:
+        if hasattr(source, "get") and targets and not hasattr(targets[0], "get"):
+            source = source.get()
+            if _copy_hook is not None:
+                _copy_hook("to_host", source)
+        elif targets and hasattr(targets[0], "get") and not hasattr(source, "get"):
+            if _copy_hook is not None:
+                _copy_hook("to_device", source)
+        used = 0
+        while used < source.size:
+            target = targets[target_index]
+            take = min(source.size - used, target.size - filled)
+            target[filled : filled + take] = source[used : used + take]
+            used += take
+            filled += take
+            if filled == target.size:
+                target_index, filled = target_index + 1, 0
+
+
 class _Message:
     """A message from rank 0 to itself, kept until a receive takes it."""
 
@@ -394,26 +416,87 @@ class _Message:
         return pickle.loads(self.data)
 
 
-def _copy_pieces(sources: list[Any], targets: list[Any]) -> None:
-    """Copy the elements of the 1-D `sources` into the 1-D `targets`, in order."""
-    target_index, filled = 0, 0
-    for source in sources:
-        if hasattr(source, "get") and targets and not hasattr(targets[0], "get"):
-            source = source.get()
-            if _copy_hook is not None:
-                _copy_hook("to_host", source)
-        elif targets and hasattr(targets[0], "get") and not hasattr(source, "get"):
-            if _copy_hook is not None:
-                _copy_hook("to_device", source)
-        used = 0
-        while used < source.size:
-            target = targets[target_index]
-            take = min(source.size - used, target.size - filled)
-            target[filled : filled + take] = source[used : used + take]
-            used += take
-            filled += take
-            if filled == target.size:
-                target_index, filled = target_index + 1, 0
+class SerialGroup:
+    """Stand-in for ``MPI.Group``: rank 0 alone, or the empty group."""
+
+    def __init__(self, size: int = 1) -> None:
+        """Create the group of rank 0 (`size` 1) or the empty group (`size` 0)."""
+        self._size = size
+
+    def Get_size(self) -> int:
+        """Return 1, or 0 for the empty group."""
+        return self._size
+
+    def Get_rank(self) -> int:
+        """Return 0, or ``UNDEFINED`` for the empty group."""
+        return 0 if self._size else _UNDEFINED
+
+    @property
+    def size(self) -> int:
+        """The number of ranks."""
+        return self.Get_size()
+
+    @property
+    def rank(self) -> int:
+        """The rank of this process in the group."""
+        return self.Get_rank()
+
+    def Translate_ranks(
+        self, ranks: Sequence[int] | None = None, group: SerialGroup | None = None
+    ) -> list[int]:
+        """Return the ranks in `group` of `ranks` of this group (0 stays 0)."""
+        ranks = list(range(self._size)) if ranks is None else list(ranks)
+        target = 1 if group is None else group.Get_size()
+        translated = []
+        for rank in ranks:
+            if _is_proc_null(rank):
+                translated.append(rank)
+            elif rank == 0 and self._size:
+                translated.append(0 if target else _UNDEFINED)
+            else:
+                raise ValueError(f"rank {rank} is not in a group of size {self._size}")
+        return translated
+
+    def Compare(self, group: SerialGroup) -> int:
+        """Return ``IDENT`` for groups of the same size, else ``UNEQUAL``."""
+        return 0 if self._size == group.Get_size() else 3
+
+    def Incl(self, ranks: Sequence[int]) -> SerialGroup:
+        """Return the group of `ranks`: ``[0]`` or ``[]``."""
+        self.Translate_ranks(ranks)
+        return SerialGroup(1 if list(ranks) else 0)
+
+    def Excl(self, ranks: Sequence[int]) -> SerialGroup:
+        """Return the group without `ranks`."""
+        self.Translate_ranks(ranks)
+        return SerialGroup(0 if list(ranks) else self._size)
+
+    @staticmethod
+    def Union(group1: SerialGroup, group2: SerialGroup) -> SerialGroup:
+        """Return the union of two groups."""
+        return SerialGroup(max(group1.Get_size(), group2.Get_size()))
+
+    @staticmethod
+    def Intersection(group1: SerialGroup, group2: SerialGroup) -> SerialGroup:
+        """Return the intersection of two groups."""
+        return SerialGroup(min(group1.Get_size(), group2.Get_size()))
+
+    @staticmethod
+    def Difference(group1: SerialGroup, group2: SerialGroup) -> SerialGroup:
+        """Return the ranks of `group1` that are not in `group2`."""
+        return SerialGroup(group1.Get_size() if not group2.Get_size() else 0)
+
+    def Dup(self) -> SerialGroup:
+        """Return a copy."""
+        return SerialGroup(self._size)
+
+    def Free(self) -> None:
+        """Do nothing."""
+        return None
+
+    def __repr__(self) -> str:
+        """Return ``SerialGroup(size=<size>)``."""
+        return f"SerialGroup(size={self._size})"
 
 
 class SerialComm:
@@ -436,15 +519,115 @@ class SerialComm:
     rank = 0
     size = 1
 
+    # -------------------------------------------------- communicator creation
+    def Dup(self, info: Any = None) -> SerialComm:
+        """Return a new serial communicator with the same name."""
+        return SerialComm(self._name)
+
+    Clone = Dup
+
+    # ------------------------------------------------------ synchronization
+    def Barrier(self) -> None:
+        """Return at once."""
+        return None
+
+    barrier = Barrier
+
+    def Send(self, buf: Any, dest: int, tag: int = 0) -> None:
+        """Send `buf` to `dest` (0, or ``PROC_NULL``); kept until received."""
+        self.Isend(buf, dest, tag)
+
+    Bsend = Rsend = Send
+
+    # ------------------------------------------------------- point-to-point
+    def _post(self, message: _Message) -> None:
+        """Hand a message to the first matching receive, or keep it."""
+        for index, (tag, deliver) in enumerate(self._receives):
+            if _is_any_tag(tag) or tag == message.tag:
+                del self._receives[index]
+                deliver(message)
+                return
+        self._messages.append(message)
+
+    def _send(self, message: _Message, dest: int, synchronous: bool) -> SerialRequest:
+        """Post a send; a synchronous one completes when a receive takes it."""
+        _check_rank(dest, "dest")
+        request = SerialRequest()
+        if _is_proc_null(dest):
+            return request
+        if synchronous:
+            request = SerialRequest(
+                complete=False,
+                waiting_for=f"a synchronous send with tag {message.tag} waits for "
+                "a receive that rank 0 has not posted",
+            )
+            message.on_receive = request._finish
+        self._post(message)
+        return request
+
+    def Isend(self, buf: Any, dest: int, tag: int = 0) -> SerialRequest:
+        """Send `buf` and return a completed request (the data are copied)."""
+        if _is_proc_null(dest):
+            return self._send(_Message(tag, [], 0, False), dest, False)
+        return self._send(_Message.of_buffer(buf, tag), dest, synchronous=False)
+
+    Ibsend = Irsend = Isend
+
+    def send(self, obj: Any, dest: int, tag: int = 0) -> None:
+        """Send a (pickled) object to `dest`."""
+        self.isend(obj, dest, tag)
+
+    bsend = send
+
+    def isend(self, obj: Any, dest: int, tag: int = 0) -> SerialRequest:
+        """Send a (pickled) object and return a completed request."""
+        return self._send(_Message.of_object(obj, tag), dest, synchronous=False)
+
+    ibsend = isend
+
+    def Iprobe(
+        self, source: int = _ANY_SOURCE, tag: int = _ANY_TAG, status: Any = None
+    ) -> bool:
+        """Return whether a matching message is waiting, without receiving it."""
+        _check_rank(source, "source")
+        if _is_proc_null(source):
+            _fill_status(status, _PROC_NULL, _ANY_TAG, 0)
+            return True
+        for message in self._messages:
+            if _is_any_tag(tag) or tag == message.tag:
+                _fill_status(status, *message.status())
+                return True
+        return False
+
+    iprobe = Iprobe
+
+    def _waiting(self, call: str, tag: int) -> str:
+        which = "any tag" if _is_any_tag(tag) else f"tag {tag}"
+        return f"{call} waits for a message with {which} that rank 0 has not sent"
+
+    def Probe(
+        self, source: int = _ANY_SOURCE, tag: int = _ANY_TAG, status: Any = None
+    ) -> bool:
+        """Return True for a waiting message (``RuntimeError`` if none was sent)."""
+        if not self.Iprobe(source, tag, status):
+            raise RuntimeError(
+                f"Probe on rank 0 would wait forever: {self._waiting('it', tag)}"
+            )
+        return True
+
+    probe = Probe
+
+    def Send_init(self, buf: Any, dest: int, tag: int = 0) -> SerialPrequest:
+        """Return a persistent send: each ``Start`` sends `buf`."""
+        return SerialPrequest(lambda: self.Isend(buf, dest, tag))
+
+    Bsend_init = Rsend_init = Send_init
+
     def __init__(self, name: str = "COMM_WORLD") -> None:
         """Create a communicator named `name` (as ``Get_name`` returns it)."""
         self._name = name
         self._messages: list[_Message] = []  # sent, not yet received
         self._receives: list[tuple[int, Callable[[_Message], None]]] = []
-
-    def __repr__(self) -> str:
-        """Return ``SerialComm(<name>)``."""
-        return f"SerialComm({self._name})"
 
     # ---------------------------------------------------------------- queries
     def Get_rank(self) -> int:
@@ -484,13 +667,6 @@ class SerialComm:
     def topology(self) -> int:
         """The topology: ``UNDEFINED``."""
         return self.Get_topology()
-
-    # -------------------------------------------------- communicator creation
-    def Dup(self, info: Any = None) -> SerialComm:
-        """Return a new serial communicator with the same name."""
-        return SerialComm(self._name)
-
-    Clone = Dup
 
     def Split(self, color: int = 0, key: int = 0) -> Any:
         """Return a new serial communicator, or ``COMM_NULL`` for ``color=UNDEFINED``."""
@@ -536,13 +712,6 @@ class SerialComm:
     def Abort(self, errorcode: int = 0) -> None:
         """Exit the process with `errorcode` (``SystemExit``)."""
         raise SystemExit(errorcode)
-
-    # ------------------------------------------------------ synchronization
-    def Barrier(self) -> None:
-        """Return at once."""
-        return None
-
-    barrier = Barrier
 
     def Ibarrier(self) -> SerialRequest:
         """Return a completed request."""
@@ -721,26 +890,12 @@ class SerialComm:
         """Send `buf` to `dest`, then receive into `buf` from `source`."""
         self.Sendrecv(buf, dest, sendtag, buf, source, recvtag, status)
 
-    # ------------------------------------------------------- point-to-point
-    def _post(self, message: _Message) -> None:
-        """Hand a message to the first matching receive, or keep it."""
-        for index, (tag, deliver) in enumerate(self._receives):
-            if _is_any_tag(tag) or tag == message.tag:
-                del self._receives[index]
-                deliver(message)
-                return
-        self._messages.append(message)
-
     def _take(self, tag: int) -> _Message | None:
         """Remove and return the first kept message with a matching tag."""
         for index, message in enumerate(self._messages):
             if _is_any_tag(tag) or tag == message.tag:
                 return self._messages.pop(index)
         return None
-
-    def _waiting(self, call: str, tag: int) -> str:
-        which = "any tag" if _is_any_tag(tag) else f"tag {tag}"
-        return f"{call} waits for a message with {which} that rank 0 has not sent"
 
     def _receive(
         self,
@@ -771,28 +926,6 @@ class SerialComm:
             request._cancel = lambda: self._receives.remove(entry)
         return request
 
-    def _send(self, message: _Message, dest: int, synchronous: bool) -> SerialRequest:
-        """Post a send; a synchronous one completes when a receive takes it."""
-        _check_rank(dest, "dest")
-        request = SerialRequest()
-        if _is_proc_null(dest):
-            return request
-        if synchronous:
-            request = SerialRequest(
-                complete=False,
-                waiting_for=f"a synchronous send with tag {message.tag} waits for "
-                "a receive that rank 0 has not posted",
-            )
-            message.on_receive = request._finish
-        self._post(message)
-        return request
-
-    def Send(self, buf: Any, dest: int, tag: int = 0) -> None:
-        """Send `buf` to `dest` (0, or ``PROC_NULL``); kept until received."""
-        self.Isend(buf, dest, tag)
-
-    Bsend = Rsend = Send
-
     def _check_receiver(self, call: str, dest: int, tag: int) -> None:
         """Raise unless a posted receive would take a synchronous send at once."""
         _check_rank(dest, "dest")
@@ -809,14 +942,6 @@ class SerialComm:
         """Send synchronously: a matching receive must already be posted."""
         self._check_receiver("Ssend", dest, tag)
         self.Send(buf, dest, tag)
-
-    def Isend(self, buf: Any, dest: int, tag: int = 0) -> SerialRequest:
-        """Send `buf` and return a completed request (the data are copied)."""
-        if _is_proc_null(dest):
-            return self._send(_Message(tag, [], 0, False), dest, False)
-        return self._send(_Message.of_buffer(buf, tag), dest, synchronous=False)
-
-    Ibsend = Irsend = Isend
 
     def Issend(self, buf: Any, dest: int, tag: int = 0) -> SerialRequest:
         """Send synchronously: the request completes when a receive takes it."""
@@ -842,22 +967,10 @@ class SerialComm:
             source, tag, lambda message: message.unpack_buffer(buf), "a receive"
         )
 
-    def send(self, obj: Any, dest: int, tag: int = 0) -> None:
-        """Send a (pickled) object to `dest`."""
-        self.isend(obj, dest, tag)
-
-    bsend = send
-
     def ssend(self, obj: Any, dest: int, tag: int = 0) -> None:
         """Send an object synchronously: a matching receive must be posted."""
         self._check_receiver("ssend", dest, tag)
         self.send(obj, dest, tag)
-
-    def isend(self, obj: Any, dest: int, tag: int = 0) -> SerialRequest:
-        """Send a (pickled) object and return a completed request."""
-        return self._send(_Message.of_object(obj, tag), dest, synchronous=False)
-
-    ibsend = isend
 
     def issend(self, obj: Any, dest: int, tag: int = 0) -> SerialRequest:
         """Send an object synchronously: complete when a receive takes it."""
@@ -880,40 +993,6 @@ class SerialComm:
         return self._receive(
             source, tag, lambda message: message.unpack_object(), "an object receive"
         )
-
-    def Iprobe(
-        self, source: int = _ANY_SOURCE, tag: int = _ANY_TAG, status: Any = None
-    ) -> bool:
-        """Return whether a matching message is waiting, without receiving it."""
-        _check_rank(source, "source")
-        if _is_proc_null(source):
-            _fill_status(status, _PROC_NULL, _ANY_TAG, 0)
-            return True
-        for message in self._messages:
-            if _is_any_tag(tag) or tag == message.tag:
-                _fill_status(status, *message.status())
-                return True
-        return False
-
-    iprobe = Iprobe
-
-    def Probe(
-        self, source: int = _ANY_SOURCE, tag: int = _ANY_TAG, status: Any = None
-    ) -> bool:
-        """Return True for a waiting message (``RuntimeError`` if none was sent)."""
-        if not self.Iprobe(source, tag, status):
-            raise RuntimeError(
-                f"Probe on rank 0 would wait forever: {self._waiting('it', tag)}"
-            )
-        return True
-
-    probe = Probe
-
-    def Send_init(self, buf: Any, dest: int, tag: int = 0) -> SerialPrequest:
-        """Return a persistent send: each ``Start`` sends `buf`."""
-        return SerialPrequest(lambda: self.Isend(buf, dest, tag))
-
-    Bsend_init = Rsend_init = Send_init
 
     def Ssend_init(self, buf: Any, dest: int, tag: int = 0) -> SerialPrequest:
         """Return a persistent synchronous send."""
@@ -940,9 +1019,20 @@ class SerialComm:
         self.Allgather(sendbuf, recvbuf)
         return SerialRequest()
 
+    def __repr__(self) -> str:
+        """Return ``SerialComm(<name>)``."""
+        return f"SerialComm({self._name})"
+
 
 class SerialStatus:
     """Stand-in for ``MPI.Status``: the source, tag and size of a received message."""
+
+    def Get_count(self, datatype: Any = None) -> int:
+        """Return the number of `datatype` items received (bytes by default)."""
+        size = 1 if datatype is None else datatype.Get_size()
+        return self.count // size if size else 0
+
+    Get_elements = Get_count
 
     def __init__(self) -> None:
         """Create a status of an empty message from rank 0 with tag 0."""
@@ -966,99 +1056,9 @@ class SerialStatus:
         """Return 0 (``SUCCESS``)."""
         return self.error
 
-    def Get_count(self, datatype: Any = None) -> int:
-        """Return the number of `datatype` items received (bytes by default)."""
-        size = 1 if datatype is None else datatype.Get_size()
-        return self.count // size if size else 0
-
-    Get_elements = Get_count
-
     def Is_cancelled(self) -> bool:
         """Return False."""
         return False
-
-
-class SerialGroup:
-    """Stand-in for ``MPI.Group``: rank 0 alone, or the empty group."""
-
-    def __init__(self, size: int = 1) -> None:
-        """Create the group of rank 0 (`size` 1) or the empty group (`size` 0)."""
-        self._size = size
-
-    def __repr__(self) -> str:
-        """Return ``SerialGroup(size=<size>)``."""
-        return f"SerialGroup(size={self._size})"
-
-    def Get_size(self) -> int:
-        """Return 1, or 0 for the empty group."""
-        return self._size
-
-    def Get_rank(self) -> int:
-        """Return 0, or ``UNDEFINED`` for the empty group."""
-        return 0 if self._size else _UNDEFINED
-
-    @property
-    def size(self) -> int:
-        """The number of ranks."""
-        return self.Get_size()
-
-    @property
-    def rank(self) -> int:
-        """The rank of this process in the group."""
-        return self.Get_rank()
-
-    def Translate_ranks(
-        self, ranks: Sequence[int] | None = None, group: SerialGroup | None = None
-    ) -> list[int]:
-        """Return the ranks in `group` of `ranks` of this group (0 stays 0)."""
-        ranks = list(range(self._size)) if ranks is None else list(ranks)
-        target = 1 if group is None else group.Get_size()
-        translated = []
-        for rank in ranks:
-            if _is_proc_null(rank):
-                translated.append(rank)
-            elif rank == 0 and self._size:
-                translated.append(0 if target else _UNDEFINED)
-            else:
-                raise ValueError(f"rank {rank} is not in a group of size {self._size}")
-        return translated
-
-    def Compare(self, group: SerialGroup) -> int:
-        """Return ``IDENT`` for groups of the same size, else ``UNEQUAL``."""
-        return 0 if self._size == group.Get_size() else 3
-
-    def Incl(self, ranks: Sequence[int]) -> SerialGroup:
-        """Return the group of `ranks`: ``[0]`` or ``[]``."""
-        self.Translate_ranks(ranks)
-        return SerialGroup(1 if list(ranks) else 0)
-
-    def Excl(self, ranks: Sequence[int]) -> SerialGroup:
-        """Return the group without `ranks`."""
-        self.Translate_ranks(ranks)
-        return SerialGroup(0 if list(ranks) else self._size)
-
-    @staticmethod
-    def Union(group1: SerialGroup, group2: SerialGroup) -> SerialGroup:
-        """Return the union of two groups."""
-        return SerialGroup(max(group1.Get_size(), group2.Get_size()))
-
-    @staticmethod
-    def Intersection(group1: SerialGroup, group2: SerialGroup) -> SerialGroup:
-        """Return the intersection of two groups."""
-        return SerialGroup(min(group1.Get_size(), group2.Get_size()))
-
-    @staticmethod
-    def Difference(group1: SerialGroup, group2: SerialGroup) -> SerialGroup:
-        """Return the ranks of `group1` that are not in `group2`."""
-        return SerialGroup(group1.Get_size() if not group2.Get_size() else 0)
-
-    def Dup(self) -> SerialGroup:
-        """Return a copy."""
-        return SerialGroup(self._size)
-
-    def Free(self) -> None:
-        """Do nothing."""
-        return None
 
 
 class SerialCartcomm(SerialComm):
@@ -1067,6 +1067,12 @@ class SerialCartcomm(SerialComm):
     Every dimension has length 1. Along a periodic dimension rank 0 is its own
     neighbour; along the others ``Shift`` gives ``PROC_NULL``.
     """
+
+    def Dup(self, info: Any = None) -> SerialCartcomm:
+        """Return a new Cartesian communicator with the same grid."""
+        return SerialCartcomm(self._dims, self._periods, self._name)
+
+    Clone = Dup
 
     def __init__(
         self,
@@ -1078,18 +1084,6 @@ class SerialCartcomm(SerialComm):
         super().__init__(name)
         self._dims = [int(n) for n in dims]
         self._periods = [int(bool(p)) for p in periods]
-
-    def __repr__(self) -> str:
-        """Return ``SerialCartcomm(<name>, dims=..., periods=...)``."""
-        return (
-            f"SerialCartcomm({self._name}, dims={self._dims}, periods={self._periods})"
-        )
-
-    def Dup(self, info: Any = None) -> SerialCartcomm:
-        """Return a new Cartesian communicator with the same grid."""
-        return SerialCartcomm(self._dims, self._periods, self._name)
-
-    Clone = Dup
 
     def Get_topology(self) -> int:
         """Return ``CART``."""
@@ -1163,6 +1157,12 @@ class SerialCartcomm(SerialComm):
             [n for n, k in zip(self._dims, keep, strict=True) if k],
             [bool(p) for p, k in zip(self._periods, keep, strict=True) if k],
             self._name,
+        )
+
+    def __repr__(self) -> str:
+        """Return ``SerialCartcomm(<name>, dims=..., periods=...)``."""
+        return (
+            f"SerialCartcomm({self._name}, dims={self._dims}, periods={self._periods})"
         )
 
 
@@ -1292,10 +1292,6 @@ class SerialMPI:
         "F": C_FLOAT_COMPLEX, "D": C_DOUBLE_COMPLEX,
     })  # fmt: skip
 
-    def __repr__(self) -> str:
-        """Return a description that names the stand-in."""
-        return "<SerialMPI: serial stand-in for mpi4py.MPI>"
-
     @staticmethod
     def Wtime() -> float:
         """Return the wall-clock time in seconds (``time.time()``)."""
@@ -1355,3 +1351,7 @@ class SerialMPI:
     def Query_thread() -> int:
         """Return 0 (``THREAD_SINGLE``)."""
         return 0
+
+    def __repr__(self) -> str:
+        """Return a description that names the stand-in."""
+        return "<SerialMPI: serial stand-in for mpi4py.MPI>"

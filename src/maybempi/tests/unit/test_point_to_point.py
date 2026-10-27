@@ -273,15 +273,6 @@ class _DeviceArray:
     def __init__(self, data):
         self._data = np.asarray(data)
 
-    def __getattr__(self, name):
-        return getattr(self._data, name)
-
-    def __getitem__(self, index):
-        return _DeviceArray(self._data[index])
-
-    def __setitem__(self, index, value):
-        self._data[index] = value._data if isinstance(value, _DeviceArray) else value
-
     def reshape(self, *shape):
         return _DeviceArray(self._data.reshape(*shape))
 
@@ -290,6 +281,15 @@ class _DeviceArray:
 
     def get(self):
         return self._data.copy()
+
+    def __getattr__(self, name):
+        return getattr(self._data, name)
+
+    def __getitem__(self, index):
+        return _DeviceArray(self._data[index])
+
+    def __setitem__(self, index, value):
+        self._data[index] = value._data if isinstance(value, _DeviceArray) else value
 
 
 def test_device_buffers_and_the_copy_hook(comm):
