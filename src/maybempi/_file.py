@@ -45,8 +45,108 @@ def _byte_view(array: Any, writable: bool) -> memoryview:
     return memoryview(array.reshape(-1).view("u1"))
 
 
+def _fill_status(status: Any, nbytes: int) -> None:
+    """Record a transfer of `nbytes` in an ``MPI.Status``-like object, if given."""
+    if status is not None:
+        status._set(0, 0, nbytes)
+
+
 class SerialFile:
     """Stand-in for ``mpi4py.MPI.File``: a file opened by the only process."""
+
+    def _segments(self, offset: int, count: int) -> list[tuple[int, int]]:
+        """Return the ``(byte position, bytes)`` pieces of `count` etypes from `offset`."""
+        per_copy = self._starts[-1]
+        if count and not per_copy:
+            raise ValueError("the file type of the view holds no data")
+        size, extent = self._etype.size, self._filetype._extent
+        segments: list[list[int]] = []
+        while count > 0:
+            copy, within = divmod(offset, per_copy)
+            run = bisect.bisect_right(self._starts, within) - 1
+            start, length = self._filetype._runs[run]
+            inside = within - self._starts[run]
+            take = min(length - inside, count)
+            position = self._disp + (copy * extent + start + inside) * size
+            if segments and segments[-1][0] + segments[-1][1] == position:
+                segments[-1][1] += take * size
+            else:
+                segments.append([position, take * size])
+            offset += take
+            count -= take
+        return [(position, nbytes) for position, nbytes in segments]
+
+    # ---------------------------------------------------------- data access
+    def _memory(self, buf: Any, writable: bool) -> tuple[memoryview, list[slice]]:
+        """Return the bytes of a buffer and the byte slices it covers, in order."""
+        array, runs = _buffer_runs(buf)
+        data = _byte_view(array, writable)
+        item = array.itemsize
+        return data, [
+            slice(start * item, (start + length) * item) for start, length in runs
+        ]
+
+    def _write(self, offset: int, buf: Any, status: Any) -> int:
+        """Write `buf` at etype `offset` of the view; return the etypes written."""
+        data, pieces = self._memory(buf, writable=False)
+        payload = b"".join(data[piece] for piece in pieces)
+        count, rest = divmod(len(payload), self._etype.size)
+        if rest:
+            raise ValueError("the buffer is not a whole number of elementary types")
+        done = 0
+        for position, nbytes in self._segments(offset, count):
+            self._handle.seek(position)
+            self._handle.write(payload[done : done + nbytes])
+            done += nbytes
+        _fill_status(status, len(payload))
+        return count
+
+    def Write_at(self, offset: int, buf: Any, status: Any = None) -> None:
+        """Write `buf` at the explicit offset `offset` (in etypes of the view)."""
+        self._write(offset, buf, status)
+
+    Write_at_all = Write_at
+
+    def _read(self, offset: int, buf: Any, status: Any) -> int:
+        """Read into `buf` from etype `offset` of the view; return the etypes read."""
+        data, pieces = self._memory(buf, writable=True)
+        wanted = sum(piece.stop - piece.start for piece in pieces)
+        count = wanted // self._etype.size
+        payload = bytearray()
+        for position, nbytes in self._segments(offset, count):
+            self._handle.seek(position)
+            chunk = self._handle.read(nbytes)
+            payload += chunk
+            if len(chunk) < nbytes:  # the end of the file
+                break
+        payload = payload[: len(payload) - len(payload) % self._etype.size]
+        done = 0
+        for piece in pieces:
+            take = min(piece.stop - piece.start, len(payload) - done)
+            if take <= 0:
+                break
+            data[piece.start : piece.start + take] = payload[done : done + take]
+            done += take
+        _fill_status(status, len(payload))
+        return len(payload) // self._etype.size
+
+    def Read_at(self, offset: int, buf: Any, status: Any = None) -> None:
+        """Read into `buf` from the explicit offset `offset` (in etypes of the view)."""
+        self._read(offset, buf, status)
+
+    Read_at_all = Read_at
+
+    def Write(self, buf: Any, status: Any = None) -> None:
+        """Write `buf` at the file pointer and advance it."""
+        self._position += self._write(self._position, buf, status)
+
+    Write_all = Write
+
+    def Read(self, buf: Any, status: Any = None) -> None:
+        """Read into `buf` from the file pointer and advance it."""
+        self._position += self._read(self._position, buf, status)
+
+    Read_all = Read
 
     def __init__(self, handle: Any, path: str, amode: int) -> None:
         """Wrap an open Python file; use :meth:`Open`."""
@@ -57,18 +157,6 @@ class SerialFile:
         self.Set_view()
         if amode & MODE_APPEND:
             self._position = self.Get_size() // self._etype.size
-
-    def __repr__(self) -> str:
-        """Return ``SerialFile(<path>)``."""
-        return f"SerialFile({self._path!r})"
-
-    def __enter__(self) -> SerialFile:
-        """Return the file, to close it at the end of a ``with`` block."""
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        """Close the file."""
-        self.Close()
 
     # ---------------------------------------------------- opening, closing
     @classmethod
@@ -200,100 +288,6 @@ class SerialFile:
             return self._disp
         return self._segments(offset, 1)[0][0]
 
-    def _segments(self, offset: int, count: int) -> list[tuple[int, int]]:
-        """Return the ``(byte position, bytes)`` pieces of `count` etypes from `offset`."""
-        per_copy = self._starts[-1]
-        if count and not per_copy:
-            raise ValueError("the file type of the view holds no data")
-        size, extent = self._etype.size, self._filetype._extent
-        segments: list[list[int]] = []
-        while count > 0:
-            copy, within = divmod(offset, per_copy)
-            run = bisect.bisect_right(self._starts, within) - 1
-            start, length = self._filetype._runs[run]
-            inside = within - self._starts[run]
-            take = min(length - inside, count)
-            position = self._disp + (copy * extent + start + inside) * size
-            if segments and segments[-1][0] + segments[-1][1] == position:
-                segments[-1][1] += take * size
-            else:
-                segments.append([position, take * size])
-            offset += take
-            count -= take
-        return [(position, nbytes) for position, nbytes in segments]
-
-    # ---------------------------------------------------------- data access
-    def _memory(self, buf: Any, writable: bool) -> tuple[memoryview, list[slice]]:
-        """Return the bytes of a buffer and the byte slices it covers, in order."""
-        array, runs = _buffer_runs(buf)
-        data = _byte_view(array, writable)
-        item = array.itemsize
-        return data, [
-            slice(start * item, (start + length) * item) for start, length in runs
-        ]
-
-    def _write(self, offset: int, buf: Any, status: Any) -> int:
-        """Write `buf` at etype `offset` of the view; return the etypes written."""
-        data, pieces = self._memory(buf, writable=False)
-        payload = b"".join(data[piece] for piece in pieces)
-        count, rest = divmod(len(payload), self._etype.size)
-        if rest:
-            raise ValueError("the buffer is not a whole number of elementary types")
-        done = 0
-        for position, nbytes in self._segments(offset, count):
-            self._handle.seek(position)
-            self._handle.write(payload[done : done + nbytes])
-            done += nbytes
-        _fill_status(status, len(payload))
-        return count
-
-    def _read(self, offset: int, buf: Any, status: Any) -> int:
-        """Read into `buf` from etype `offset` of the view; return the etypes read."""
-        data, pieces = self._memory(buf, writable=True)
-        wanted = sum(piece.stop - piece.start for piece in pieces)
-        count = wanted // self._etype.size
-        payload = bytearray()
-        for position, nbytes in self._segments(offset, count):
-            self._handle.seek(position)
-            chunk = self._handle.read(nbytes)
-            payload += chunk
-            if len(chunk) < nbytes:  # the end of the file
-                break
-        payload = payload[: len(payload) - len(payload) % self._etype.size]
-        done = 0
-        for piece in pieces:
-            take = min(piece.stop - piece.start, len(payload) - done)
-            if take <= 0:
-                break
-            data[piece.start : piece.start + take] = payload[done : done + take]
-            done += take
-        _fill_status(status, len(payload))
-        return len(payload) // self._etype.size
-
-    def Write_at(self, offset: int, buf: Any, status: Any = None) -> None:
-        """Write `buf` at the explicit offset `offset` (in etypes of the view)."""
-        self._write(offset, buf, status)
-
-    Write_at_all = Write_at
-
-    def Read_at(self, offset: int, buf: Any, status: Any = None) -> None:
-        """Read into `buf` from the explicit offset `offset` (in etypes of the view)."""
-        self._read(offset, buf, status)
-
-    Read_at_all = Read_at
-
-    def Write(self, buf: Any, status: Any = None) -> None:
-        """Write `buf` at the file pointer and advance it."""
-        self._position += self._write(self._position, buf, status)
-
-    Write_all = Write
-
-    def Read(self, buf: Any, status: Any = None) -> None:
-        """Read into `buf` from the file pointer and advance it."""
-        self._position += self._read(self._position, buf, status)
-
-    Read_all = Read
-
     def Iwrite_at(self, offset: int, buf: Any) -> Any:
         """Write like ``Write_at`` and return a completed request."""
         from maybempi.serial import SerialRequest
@@ -350,8 +344,14 @@ class SerialFile:
         """Return the file pointer, in etypes of the view."""
         return self._position
 
+    def __enter__(self) -> SerialFile:
+        """Return the file, to close it at the end of a ``with`` block."""
+        return self
 
-def _fill_status(status: Any, nbytes: int) -> None:
-    """Record a transfer of `nbytes` in an ``MPI.Status``-like object, if given."""
-    if status is not None:
-        status._set(0, 0, nbytes)
+    def __exit__(self, *exc_info: object) -> None:
+        """Close the file."""
+        self.Close()
+
+    def __repr__(self) -> str:
+        """Return ``SerialFile(<path>)``."""
+        return f"SerialFile({self._path!r})"

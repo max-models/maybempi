@@ -26,6 +26,9 @@ jobs:
       - name: Check formatting
         run: uvx ruff format --check .
 
+      - name: Check statement order
+        run: uvx ssort --check --diff .
+
   pyright:
     runs-on: ubuntu-latest
     steps:
