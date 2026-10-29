@@ -1,5 +1,5 @@
 ---
-title: The serial stand-in
+title: Serial stand-in
 description: What SerialMPI and SerialComm do with each call on one process.
 ---
 

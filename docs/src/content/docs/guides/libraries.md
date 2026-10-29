@@ -1,5 +1,5 @@
 ---
-title: Using maybempi in a library
+title: Use in libraries
 description: Decide once, share the communicator, and tell serial from MPI runs.
 ---
 
