@@ -125,6 +125,10 @@ jobs:
       - name: Unit tests and tests under mpiexec -n 2
         env:
           OMP_NUM_THREADS: "1"
+          # conda-forge's Open MPI picks UCX, which cannot open the runners' network device
+          # (uct_iface_open ... mana_0 failed); use the ob1 and shared-memory transports instead.
+          OMPI_MCA_pml: ob1
+          OMPI_MCA_osc: ^ucx
         run: |
           python -c "from petsc4py import PETSc; print(PETSc.Sys.getVersion())"
           python -m pytest -q src/maybempi/tests
