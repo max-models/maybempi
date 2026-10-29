@@ -73,7 +73,7 @@ Commits](https://www.conventionalcommits.org/); see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 The documentation in `docs/` is an [Astro](https://astro.build/) +
-[Starlight](https://starlight.astro.build/) site with the executed
+[Starlight](https://starlight.astro.build/) site with the executed example
 notebooks from `tutorials/` and an API reference generated from the
 docstrings. It needs Node 22 or newer:
 

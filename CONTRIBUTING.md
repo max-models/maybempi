@@ -40,7 +40,7 @@ and changelog manually.
 ## Pull requests
 
 Open the PR against `devel`. CI runs the tests on every supported Python version, ruff, pyright,
-the tutorials and the documentation build. One approving review is required to merge.
+the example notebooks and the documentation build. One approving review is required to merge.
 
 ## Releases
 
