@@ -89,7 +89,9 @@ jobs:
       - name: Install project with mpi4py built against ${{ matrix.mpi }}
         run: |
           uv sync --extra test
-          uv pip install --no-binary mpi4py mpi4py
+          # without the uv cache, which both matrix jobs share: a wheel built against the other MPI
+          # fails to load (libmpich.so.12 under Open MPI)
+          uv pip install --no-cache --no-binary mpi4py mpi4py
 
       - name: Unit tests, including the mpi4py comparison and mpiexec from Python
         run: .venv/bin/python -m pytest -q src/maybempi/tests
@@ -125,6 +127,10 @@ jobs:
       - name: Unit tests and tests under mpiexec -n 2
         env:
           OMP_NUM_THREADS: "1"
+          # conda-forge's Open MPI picks UCX, which cannot open the runners' network device
+          # (uct_iface_open ... mana_0 failed); use the ob1 and shared-memory transports instead.
+          OMPI_MCA_pml: ob1
+          OMPI_MCA_osc: ^ucx
         run: |
           python -c "from petsc4py import PETSc; print(PETSc.Sys.getVersion())"
           python -m pytest -q src/maybempi/tests
