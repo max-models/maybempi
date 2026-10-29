@@ -1,5 +1,5 @@
 ---
-title: How the decision is made
+title: Detection
 description: Launcher variables, the MAYBEMPI override, Slurm, and when the decision is taken.
 ---
 

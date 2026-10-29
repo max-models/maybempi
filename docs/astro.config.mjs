@@ -26,9 +26,9 @@ export default defineDocs({
 		{
 			label: 'Guides',
 			items: [
-				{ label: 'How the decision is made', slug: 'guides/detection' },
-				{ label: 'The serial stand-in', slug: 'guides/serial-stand-in' },
-				{ label: 'Using maybempi in a library', slug: 'guides/libraries' },
+				{ label: 'Detection', slug: 'guides/detection' },
+				{ label: 'Serial stand-in', slug: 'guides/serial-stand-in' },
+				{ label: 'Use in libraries', slug: 'guides/libraries' },
 			],
 		},
 		{
