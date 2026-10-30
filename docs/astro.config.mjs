@@ -11,7 +11,7 @@ export default defineDocs({
 	nav: [
 		{ label: 'Getting started', link: '/getting-started/installation/' },
 		{ label: 'Guides', link: '/guides/detection/' },
-		{ label: 'Tutorials', link: '/tutorials/' },
+		{ label: 'Examples', link: '/examples/' },
 		{ label: 'Development', link: '/development/docs/' },
 		{ label: 'API', link: '/api/maybempi/' },
 	],
@@ -32,8 +32,8 @@ export default defineDocs({
 			],
 		},
 		{
-			label: 'Tutorials',
-			items: [{ autogenerate: { directory: 'tutorials' } }],
+			label: 'Examples',
+			items: [{ autogenerate: { directory: 'examples' } }],
 		},
 		{
 			label: 'Development',

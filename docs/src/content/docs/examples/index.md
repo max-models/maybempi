@@ -1,5 +1,5 @@
 ---
-title: Tutorials
+title: Examples
 description: Notebooks from the tutorials directory, executed and published with their outputs.
 sidebar:
   order: 0

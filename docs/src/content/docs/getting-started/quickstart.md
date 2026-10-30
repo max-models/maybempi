@@ -51,5 +51,5 @@ MPI = maybempi.get_mpi()
 - [How the decision is made](/maybempi/guides/detection/): which launchers are recognized, and
   how to override the decision.
 - [The serial stand-in](/maybempi/guides/serial-stand-in/): what each call does on one process.
-- [The tutorial](/maybempi/tutorials/one-code-path/), executed with its outputs.
+- [The example](/maybempi/examples/one-code-path/), executed with its outputs.
 - The [API reference](/maybempi/api/maybempi/).

@@ -28,7 +28,7 @@ jobs:
         getting-started/installation/index.html
         guides/detection/index.html
         guides/serial-stand-in/index.html
-        tutorials/one-code-path/index.html
+        examples/one-code-path/index.html
         api/maybempi/index.html
         api/maybempi/launch/index.html
         api/maybempi/serial/index.html
