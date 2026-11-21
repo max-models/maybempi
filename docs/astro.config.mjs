@@ -28,6 +28,7 @@ export default defineDocs({
 			items: [
 				{ label: 'Detection', slug: 'guides/detection' },
 				{ label: 'Serial stand-in', slug: 'guides/serial-stand-in' },
+				{ label: 'Array collectives', slug: 'guides/collectives' },
 				{ label: 'Use in libraries', slug: 'guides/libraries' },
 			],
 		},

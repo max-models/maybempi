@@ -95,3 +95,27 @@ def test_mpiexec():
     assert ["MPI", "mpi4py"] in common_rows and ["size", "2"] in common_rows
     ranks = [line.split()[0] for line in per_rank.splitlines()[2:]]
     assert ranks == ["0", "1"], result.stdout
+
+
+@under_mpi
+def test_collectives_module_across_ranks():
+    from maybempi.collectives import (
+        allmax,
+        allsum,
+        block,
+        gather_blocks,
+        gather_columns,
+    )
+
+    comm = maybempi.get_mpi().COMM_WORLD
+    rank, size = comm.Get_rank(), comm.Get_size()
+    columns, offset = gather_columns(comm, np.full((2, rank + 1), float(rank)))
+    assert columns.shape == (2, size * (size + 1) // 2)
+    assert offset == rank * (rank + 1) // 2
+    share = block(11, comm)
+    assert np.array_equal(
+        gather_blocks(comm, np.arange(11.0)[share], 11), np.arange(11.0)
+    )
+    assert allsum(comm, rank) == size * (size - 1) // 2
+    assert np.array_equal(allsum(comm, np.ones(3)), np.full(3, size))
+    assert allmax(comm, rank) == size - 1
