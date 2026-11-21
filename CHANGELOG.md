@@ -7,6 +7,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `maybempi.collectives`: `block` (a rank's share of `range(n)`), `gather_columns` and
+  `gather_blocks` (`Allgatherv` of per-rank NumPy arrays in rank order), `allsum`, `allmax`,
+  `size`, `rank` and `is_parallel`, for any communicator or `None`; one rank returns at once.
+  Needs NumPy, which `import maybempi` still does not import.
+- `maybempi.testing`: `run_ranks(size, function)` runs a function on thread ranks
+  (`ThreadComm`: `allgather`, `allreduce`, `bcast`, `Allgatherv`, `Allreduce`, `Bcast`,
+  `Barrier`), to test parallel code paths under plain pytest.
 - `maybempi.petsc_comm(comm)`: the petsc4py communicator for a maybempi or mpi4py
   communicator, `PETSc.COMM_SELF` for the serial stand-in and for one process,
   `PETSc.Comm(comm)` otherwise. petsc4py is imported only when it is called.
