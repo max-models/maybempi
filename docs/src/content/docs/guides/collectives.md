@@ -14,8 +14,8 @@ from maybempi import MPI
 from maybempi.collectives import allsum, block, gather_blocks
 
 comm = MPI.COMM_WORLD
-mine = block(len(points), comm)            # this rank's contiguous share
-values = evaluate(points[mine])            # each rank does its share
+mine = block(len(points), comm)  # this rank's contiguous share
+values = evaluate(points[mine])  # each rank does its share
 values = gather_blocks(comm, values, len(points))  # the whole result on every rank
 total = allsum(comm, values.sum())
 ```
@@ -41,6 +41,7 @@ count towards coverage under plain pytest, without mpirun or mpi4py:
 ```python
 import numpy as np
 from maybempi.testing import run_ranks
+
 
 def test_parallel_sum_matches_serial():
     data = np.arange(100.0)

@@ -113,7 +113,9 @@ def test_collectives_module_across_ranks():
     assert columns.shape == (2, size * (size + 1) // 2)
     assert offset == rank * (rank + 1) // 2
     share = block(11, comm)
-    assert np.array_equal(gather_blocks(comm, np.arange(11.0)[share], 11), np.arange(11.0))
+    assert np.array_equal(
+        gather_blocks(comm, np.arange(11.0)[share], 11), np.arange(11.0)
+    )
     assert allsum(comm, rank) == size * (size - 1) // 2
     assert np.array_equal(allsum(comm, np.ones(3)), np.full(3, size))
     assert allmax(comm, rank) == size - 1

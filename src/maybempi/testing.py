@@ -99,7 +99,9 @@ class ThreadComm:
         buf[...] = self._exchange(np.array(buf, copy=True))[root]
 
 
-def run_ranks(size: int, function: Callable[[ThreadComm], Any], timeout: float = 120.0) -> list:
+def run_ranks(
+    size: int, function: Callable[[ThreadComm], Any], timeout: float = 120.0
+) -> list:
     """``function(comm)`` on ``size`` thread ranks at once; their results in rank order.
 
     A collective that some rank never reaches fails after ``timeout`` seconds instead

@@ -78,4 +78,7 @@ def test_blocks_partition_the_range(n):
     shares = run_ranks(4, lambda comm: block(n, comm))
     covered = [i for share in shares for i in range(n)[share]]
     assert covered == list(range(n))
-    assert max(len(range(n)[s]) for s in shares) - min(len(range(n)[s]) for s in shares) <= 1
+    assert (
+        max(len(range(n)[s]) for s in shares) - min(len(range(n)[s]) for s in shares)
+        <= 1
+    )

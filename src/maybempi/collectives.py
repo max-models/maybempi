@@ -83,7 +83,9 @@ def gather_blocks(comm: Any, local: Any, n: int) -> np.ndarray:
         return np.asarray(local)
     gathered, _ = gather_columns(comm, local)
     if gathered.shape[-1] != n:
-        raise ValueError(f"the ranks' pieces hold {gathered.shape[-1]} columns, not {n}")
+        raise ValueError(
+            f"the ranks' pieces hold {gathered.shape[-1]} columns, not {n}"
+        )
     return gathered
 
 
