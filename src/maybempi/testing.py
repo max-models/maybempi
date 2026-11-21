@@ -47,6 +47,7 @@ class ThreadComm:
     """Rank ``rank`` of a group of threads that stand for MPI ranks (see :func:`run_ranks`)."""
 
     def __init__(self, world: _World, rank: int):
+        """Rank ``rank`` of ``world``; :func:`run_ranks` makes them."""
         self._world = world
         self._rank = rank
 

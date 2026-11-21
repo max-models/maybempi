@@ -99,7 +99,13 @@ def test_mpiexec():
 
 @under_mpi
 def test_collectives_module_across_ranks():
-    from maybempi.collectives import allmax, allsum, block, gather_blocks, gather_columns
+    from maybempi.collectives import (
+        allmax,
+        allsum,
+        block,
+        gather_blocks,
+        gather_columns,
+    )
 
     comm = maybempi.get_mpi().COMM_WORLD
     rank, size = comm.Get_rank(), comm.Get_size()
