@@ -1,10 +1,15 @@
 """maybempi.testing: thread ranks behave like MPI ranks."""
 
+import sys
+
 import numpy as np
 import pytest
 
 from maybempi import SerialMPI
 from maybempi.testing import run_ranks
+
+# Pyodide (the browser) has no threads
+pytestmark = pytest.mark.skipif(sys.platform == "emscripten", reason="no threads")
 
 
 def test_collectives():

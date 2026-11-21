@@ -1,5 +1,7 @@
 """maybempi.collectives on one process, the serial stand-in and thread ranks."""
 
+import sys
+
 import numpy as np
 import pytest
 
@@ -16,6 +18,9 @@ from maybempi.collectives import (
     size,
 )
 from maybempi.testing import run_ranks
+
+# Pyodide (the browser) has no threads, which the thread ranks need
+needs_threads = pytest.mark.skipif(sys.platform == "emscripten", reason="no threads")
 
 
 @pytest.mark.parametrize("comm", [None, SerialMPI.COMM_WORLD])
@@ -36,6 +41,7 @@ def test_ops_follow_the_communicator():
     assert _op(object(), "MAX") is SerialMPI.MAX
 
 
+@needs_threads
 def test_on_thread_ranks():
     def work(comm):
         me = comm.Get_rank()
@@ -65,6 +71,7 @@ def test_on_thread_ranks():
         assert largest == 10
 
 
+@needs_threads
 def test_blocks_must_cover_the_range():
     def work(comm):
         with pytest.raises(ValueError, match="columns"):
@@ -73,6 +80,7 @@ def test_blocks_must_cover_the_range():
     run_ranks(2, work)
 
 
+@needs_threads
 @pytest.mark.parametrize("n", [0, 1, 2, 9])
 def test_blocks_partition_the_range(n):
     shares = run_ranks(4, lambda comm: block(n, comm))

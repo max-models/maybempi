@@ -1,0 +1,20 @@
+name: Pyodide
+
+# maybempi in the browser: the wheel installed in Pyodide, every module imported, the live demo
+# of the docs run and the unit tests run against the wheel (those that need threads or
+# processes skip themselves).
+
+on:
+  push:
+    branches: ["main", "devel"]
+  pull_request:
+    branches: ["main", "devel"]
+  workflow_dispatch:
+
+jobs:
+  pyodide:
+    uses: max-models/starlight-theme/.github/workflows/pyodide.yml@v0
+    with:
+      # numpy is optional (collectives, testing, the demo and the tests import it)
+      packages: numpy
+      pytest: src/maybempi/tests/unit

@@ -14,6 +14,7 @@ implement the common collectives (``allgather``, ``allreduce``, ``bcast``, ``All
 
 A rank that raises aborts the others' waits, and :func:`run_ranks` re-raises its error.
 The reductions take the stand-in's ops (``maybempi.SerialMPI.SUM``, ``MAX``, ``MIN``).
+They need threads, so they do not run in the browser (Pyodide has none).
 """
 
 from __future__ import annotations
