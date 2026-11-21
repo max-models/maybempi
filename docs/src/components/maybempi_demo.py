@@ -50,7 +50,9 @@ def run(n=40, ranks=4):
         part, cells = _part(n, _Rank(r, ranks))
         parts.append(part)
         shares.append(cells)
-    total = allsum(comm, sum(parts))  # one rank here: allreduce returns the value itself
+    total = allsum(
+        comm, sum(parts)
+    )  # one rank here: allreduce returns the value itself
     return {
         "figure": {
             "data": [
@@ -60,7 +62,10 @@ def run(n=40, ranks=4):
                     "y": [f"rank {r}" for r in range(ranks)],
                     "x": [s.stop - s.start for s in shares],
                     "base": [s.start for s in shares],
-                    "text": [f"{s.start}–{s.stop - 1}" if s.stop > s.start else "" for s in shares],
+                    "text": [
+                        f"{s.start}–{s.stop - 1}" if s.stop > s.start else ""
+                        for s in shares
+                    ],
                     "textposition": "inside",
                     "name": "cells",
                 }
