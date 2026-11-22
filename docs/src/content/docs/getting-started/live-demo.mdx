@@ -1,0 +1,40 @@
+---
+title: Live demo
+description: maybempi in your browser, with Pyodide, where it runs on the serial stand-in.
+---
+
+import PyodideDemo from '@max-models/starlight-theme/components/PyodideDemo.astro';
+import code from '../../../components/maybempi_demo.py?raw';
+
+This page runs maybempi in your browser: [Pyodide](https://pyodide.org) is Python compiled to
+WebAssembly, so nothing is sent to a server. A browser has no `mpirun` and no mpi4py, so
+`maybempi.get_mpi()` returns the serial stand-in, and the same code that runs on many processes
+runs on one.
+
+<PyodideDemo
+	code={code}
+	controls={[
+		{ name: 'n', label: 'Cells', min: 1, max: 200, step: 1, value: 40 },
+		{ name: 'ranks', label: 'Ranks', min: 1, max: 16, step: 1, value: 4 },
+	]}
+	caption="The cells of each rank, as maybempi.collectives.block splits them."
+/>
+
+`block(n, comm)` gives each rank a contiguous share of `range(n)`; the shares differ by one cell at
+most. Each rank integrates 4 / (1 + x²) over its cells with the midpoint rule, and `allsum` adds
+the parts up to π. Under `mpirun` each process computes only its own part; here the page computes
+every rank's part in turn, and `allsum` on the stand-in's `COMM_WORLD` returns its input. The same
+calls in a script:
+
+```python
+import maybempi
+from maybempi.collectives import allsum, block
+
+comm = maybempi.get_mpi().COMM_WORLD
+cells = block(n, comm)
+x = (np.arange(cells.start, cells.stop) + 0.5) / n
+pi = allsum(comm, np.sum(4.0 / (1.0 + x * x)) / n)
+```
+
+What does not run in a browser: mpi4py and `mpirun` (there are no processes), and the thread ranks
+of `maybempi.testing` (Pyodide has no threads).

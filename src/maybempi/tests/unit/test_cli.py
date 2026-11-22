@@ -9,6 +9,9 @@ import pytest
 import maybempi
 from maybempi import __version__, cli, launch
 
+# a command line, with subprocesses: nothing for the browser (Pyodide)
+pytestmark = pytest.mark.skipif(sys.platform == "emscripten", reason="no processes")
+
 
 @pytest.fixture
 def serial_env(monkeypatch):
